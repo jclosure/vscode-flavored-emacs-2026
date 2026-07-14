@@ -1,0 +1,37 @@
+# Emacs generated state & installed packages
+/elpa/
+/eln-cache/
+/var/
+/etc/
+/auto-save-list/
+/tree-sitter/
+/transient/
+/server/
+/request/
+network-security.data
+*.elc
+*.eln
+*~
+\#*\#
+.\#*
+*.bak
+
+# C/C++ build artifacts
+build/
+cmake-build-*/
+.cache/
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.out
+a.out
+*.dSYM/
+
+# OS / editor cruft
+.DS_Store
+._*
+Thumbs.db
