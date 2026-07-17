@@ -151,31 +151,48 @@ nearest `CMakeLists.txt`, so they work from any file in the tree — e.g. with
    `compile_commands.json`, `CMAKE_BUILD_TYPE=Debug`).
 2. `C-c c j` — write a `.clangd` file pointing at `build/` so clangd gets
    exact compile flags (run once per project; then `C-c l l` to reconnect).
-3. `C-c c b` — build. `C-c c r` rebuilds (repeats last command), `C-c c k` kills it.
+3. `C-c c b` — **build only**, no debugger: `cmake --build build -j` in a
+   plain compile buffer. `C-c c r` rebuilds (repeats last command), `C-c c k`
+   kills it. Use this when you just want to check for compile errors — see
+   below for `C-c d d`, which builds *and* launches the debugger.
 
 For plain Makefiles just use `C-c c c` and type `make` (it remembers it for
 `C-c c r`). The compile buffer is colorized and auto-scrolls to the first error
 (`M-n` / `M-p` jump between them).
 
-**Debugging** (DAP via `dape`, works with lldb or gdb):
+**Debugging** (DAP via `dape`, works with lldb or gdb). `C-c d d` **builds
+and launches the debugger** — if you just want to build, use `C-c c b`
+instead (see above). Once a session starts, `C-c d <key>` is really just a
+launcher — after any one of them runs, Emacs's `repeat-mode` lets you press
+the **bare letter** again with no prefix, so most of a session is just
+tapping single keys.
+
+**Most used** — these are also the ones shown live in the mode line while a
+repeat streak is active:
+
+| Key (`C-c d …`, or bare once repeating) | Action |
+|-----|--------|
+| `n` | Step over |
+| `s` | Step into |
+| `o` | Step out |
+| `c` | Continue |
+| `b` | Toggle breakpoint |
+| `C` | Conditional breakpoint at point (prompts `Condition:`) |
+| `e` | Evaluate expression at point / minibuffer |
+
+**Everything else** (still repeatable, just left off the mode-line hint to
+keep it short):
 
 | Key | Action |
 |-----|--------|
 | `C-c d d` | Start — pick an lldb or gdb configuration |
-| `C-c d b` / `C-c d B` | Toggle breakpoint / remove all |
-| `C-c d C` | Conditional breakpoint at point (prompts `Condition:`) |
-| `C-c d c` | Continue |
-| `C-c d n` / `C-c d s` / `C-c d o` | Step over / into / out |
+| `C-c d B` | Remove all breakpoints |
 | `C-c d r` / `C-c d p` / `C-c d q` | Restart / pause / quit |
 | `C-c d i` / `C-c d R` | Info windows (locals, stack) / debug REPL |
-| `C-c d e` | Evaluate expression at point / minibuffer |
 
-**Repeating without the prefix:** right after any `C-c d <key>` command runs,
-Emacs's `repeat-mode` lets you press the bare letter again — `n n n` keeps
-stepping over, `s`/`o` step in/out, `b` toggles a breakpoint, `C` sets a
-conditional breakpoint, `e` evaluates — no need to retype `C-c d` each time.
-The streak ends the moment you press a key that isn't in the map. Full list:
-`M-x describe-repeat-maps`.
+A repeat streak ends the moment you press a key that isn't in the map (the
+mode-line hint disappears then too — nothing is shown outside a streak).
+Full key list for any repeat map, dape's or otherwise: `M-x describe-repeat-maps`.
 
 At the `C-c d d` prompt pick one of the ready-made configs:
 

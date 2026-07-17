@@ -687,6 +687,51 @@ returns it when there's exactly one, otherwise prompts."
 ;; own C-c d bindings; repeat-mode is just off by default, so turn it on.
 (repeat-mode 1)
 
+;; The repeat-mode hint normally lives in the echo area, where it gets
+;; clobbered by any other `message' call — compile output, "Compilation
+;; finished", eldoc, dape's own status pings — which is constant background
+;; noise while debugging.  Move the hint to the mode line instead: nothing
+;; else writes there, so it stays visible for the whole repeat streak.
+(defvar my/repeat-mode-line-string nil)
+
+;; `mode-line-misc-info' is a standard component of every mode-line, so
+;; `add-to-list'-ing onto its global value (the first thing tried here)
+;; makes the hint show in every window, not just the one it's meant for.
+;; Scope it locally to dape-repl instead, since that's the window that's
+;; always on screen during a session and the natural "status bar" for it.
+(add-hook 'dape-repl-mode-hook
+          (lambda ()
+            (setq-local mode-line-misc-info
+                        (cons '(my/repeat-mode-line-string my/repeat-mode-line-string)
+                              mode-line-misc-info))))
+
+;; dape's own map has ~29 keys (see dape-global-map); showing all of them
+;; makes for an unreadably long mode line.  Trim to the handful actually
+;; used mid-session — see the "Most used" table in README.md.  Any other
+;; repeat map (C-x o, M-g M-n, ...) that doesn't define these keys falls
+;; back to the full list, so this stays generically useful, not dape-only.
+(defvar my/repeat-mode-line-primary-keys '(?n ?s ?o ?c ?b ?C ?e)
+  "Keys shown in the trimmed repeat-mode mode-line hint, in display order.")
+
+(defun my/repeat-echo-mode-line (keymap)
+  "Show a trimmed repeat-mode hint for KEYMAP in the mode line."
+  (setq my/repeat-mode-line-string
+        (when keymap
+          (let ((keys (seq-filter (lambda (k) (lookup-key keymap (vector k)))
+                                   my/repeat-mode-line-primary-keys)))
+            (propertize
+             (concat " "
+                     (if keys
+                         (format "Repeat with %s"
+                                 (mapconcat (lambda (k) (key-description (vector k)))
+                                            keys ", "))
+                       (repeat-echo-message-string keymap))
+                     " ")
+             'face 'mode-line-emphasis))))
+  (force-mode-line-update t))
+
+(setq repeat-echo-function #'my/repeat-echo-mode-line)
+
 ;; dape-repl is comint-derived and the debuggee's stdout often arrives with
 ;; \r\n line endings (pty translation, Windows-built binaries, etc.), which
 ;; Emacs renders as a literal ^M.  Strip it in every comint buffer (repl,
