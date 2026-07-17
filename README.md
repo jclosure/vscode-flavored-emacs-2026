@@ -80,6 +80,37 @@ is installed. Nothing pops up for languages whose server you don't have.
 | `M-n` / `M-p` | Next / previous diagnostic |
 | `C-c !` | List all diagnostics |
 
+**Symbol navigation (xref):**
+
+| Key | Action |
+|-----|--------|
+| `M-.` | Jump to definition (`<F12>` also works, VSCode-style) |
+| `M-?` | Find references — list every place a symbol is used |
+| `M-,` | **Go back** — return to exactly where you invoked `M-.` / `M-?` from |
+| `C-M-,` | Go forward (undoes a `M-,` if you backed up too far) |
+
+These are stock Emacs bindings, not remapped by this config. With eglot
+attached, `M-.`/`M-?` use the language server's real symbol data instead of
+a text search, so "definition" and "references" are accurate even across
+files. Each jump pushes a marker, so you can chase a call three definitions
+deep and then tap `M-,` three times to retrace your steps back out.
+
+**Looking up documentation for a symbol:**
+
+| Key | Action |
+|-----|--------|
+| *(resting on a symbol)* | eldoc shows its signature/type in the echo area automatically — no key needed |
+| `C-c l h` | Force that signature into the echo area right now |
+| `C-c l d` | Same info in a scrollable buffer (`eldoc-doc-buffer`) — better for long docs |
+| `C-c C-d` | `helpful-at-point` — full docs for whatever's under the cursor: docstring, source, references |
+| `C-h f` / `C-h v` | `helpful-callable` / `helpful-variable` — describe any function/variable by name |
+
+**Closing a help/doc window when you're done:** don't switch to it and hit
+`q` — from wherever you are, `C-c <left>` (`winner-undo`) restores the
+window layout to before it popped up. This is generic, not doc-specific: it
+undoes the last window-layout change, so it also works for compile output,
+grep results, magit status, etc.
+
 Install the server binaries you want (examples):
 
 ```
