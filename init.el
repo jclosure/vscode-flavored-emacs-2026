@@ -518,6 +518,28 @@ project root, then `default-directory', if no CMakeLists.txt is found."
     ;; adapter and the inferior process can't expand "~" themselves.
     (expand-file-name (or root (my/project-root)))))
 
+(defun my/cxx-compiler-override ()
+  "On Linux, prefer the newest g++-N found on PATH; nil elsewhere.
+Ubuntu's apt packages leave the default `c++'/`g++' symlink pointed at
+whichever version was installed first, even after a newer one (e.g.
+g++-14, installed for C++23 std-lib support -- see README) lands
+alongside it.  Each GCC version only searches its own matching
+/usr/include/c++/N headers, so the build has to be pointed at the
+newer compiler explicitly.  Not needed on macOS: Apple's clang already
+tracks current C++ standards on its own."
+  (when (eq system-type 'gnu/linux)
+    (car (sort
+          (seq-mapcat
+           (lambda (dir)
+             (and (file-directory-p dir)
+                  (directory-files dir t "\\`g\\+\\+-[0-9]+\\'")))
+           exec-path)
+          (lambda (a b)
+            (> (string-to-number
+                (car (last (split-string (file-name-nondirectory a) "-"))))
+               (string-to-number
+                (car (last (split-string (file-name-nondirectory b) "-"))))))))))
+
 (defun my/cmake-configure ()
   "Configure a CMake project into ./build with compile_commands.json + debug info.
 Runs in the CMake project root, found by searching upward for CMakeLists.txt."
@@ -526,7 +548,10 @@ Runs in the CMake project root, found by searching upward for CMakeLists.txt."
     (message "CMake root: %s" default-directory)
     (compile (concat "cmake -S . -B build "
                      "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON "
-                     "-DCMAKE_BUILD_TYPE=Debug"))))
+                     "-DCMAKE_BUILD_TYPE=Debug"
+                     (if-let* ((cxx (my/cxx-compiler-override)))
+                         (format " -DCMAKE_CXX_COMPILER=%s" (shell-quote-argument cxx))
+                       "")))))
 
 (defun my/cmake-build ()
   "Build the CMake project in ./build using all cores.
