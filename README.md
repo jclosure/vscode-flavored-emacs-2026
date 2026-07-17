@@ -161,10 +161,21 @@ what lets it see the newly installed tools.
 
 ```sh
 sudo apt install clangd clang-format clang-tidy cmake gdb ripgrep
-# lldb users: sudo apt install lldb   (provides lldb-dap on recent LLVM)
+sudo apt install lldb    # for lldb-cmake -- see recommendation below
 ```
 
-Then `C-c d d` → pick the `lldb-dap` (macOS) or `gdb` (Linux) configuration.
+Then `C-c d d` → pick `lldb-cmake` or `gdb-cmake` (see **Debugging** below for
+why `lldb-cmake` is the one to actually use on Linux).
+
+**Ubuntu's `lldb-dap` binary is versioned, with no unversioned symlink** —
+e.g. `/usr/bin/lldb-dap-18`, never a bare `/usr/bin/lldb-dap`. This is
+inconsistent with `lldb`/`lldb-server`/`lldb-argdumper`, which the separate
+`lldb` apt package **does** symlink unversioned (checked directly:
+`update-alternatives --list lldb-dap` → "no alternatives registered", vs.
+`lldb -> lldb-18` which works fine). `my/lldb-dap-path` handles this: it
+searches PATH for any `lldb-dap-N` and picks the highest N, so it needs no
+edits when Ubuntu ships lldb-dap-19, -20, etc. — it was verified against
+lldb-dap-18 (Ubuntu 24.04 "noble") but doesn't hardcode that version.
 
 clangd is tuned with `--background-index --clang-tidy --header-insertion=iwyu`
 and PCH in memory. clang-format runs on save (apheleia) and honors a
@@ -176,13 +187,17 @@ nearest `CMakeLists.txt`, so they work from any file in the tree — e.g. with
 `src/`. (`C-c c g` echoes the detected "CMake root" in the minibuffer.) No
 `.git` or project marker is required.
 
-**Typical workflow for a CMake project:**
+**Typical workflow for a CMake project** (also the pre-flight checklist to
+run once before demoing or debugging):
 
-1. `C-c c g` — configure into `./build` at the CMake root (exports
+1. `C-c c ?` — confirm clangd/cmake/lldb-dap are all found (`my/cpp-doctor`).
+   Do this first — everything below assumes the toolchain is actually there.
+2. `C-c c g` — configure into `./build` at the CMake root (exports
    `compile_commands.json`, `CMAKE_BUILD_TYPE=Debug`).
-2. `C-c c j` — write a `.clangd` file pointing at `build/` so clangd gets
+3. `C-c c j` — write a `.clangd` file pointing at `build/` so clangd gets
    exact compile flags (run once per project; then `C-c l l` to reconnect).
-3. `C-c c b` — **build only**, no debugger: `cmake --build build -j` in a
+   **Required** for `M-.` to resolve into STL/system headers correctly.
+4. `C-c c b` — **build only**, no debugger: `cmake --build build -j` in a
    plain compile buffer. `C-c c r` rebuilds (repeats last command), `C-c c k`
    kills it. Use this when you just want to check for compile errors — see
    below for `C-c d d`, which builds *and* launches the debugger.
@@ -227,8 +242,17 @@ Full key list for any repeat map, dape's or otherwise: `M-x describe-repeat-maps
 
 At the `C-c d d` prompt pick one of the ready-made configs:
 
-- **`lldb-cmake`** (macOS) — uses `lldb-dap` from LLVM.
-- **`gdb-cmake`** (Linux) — uses `gdb --interpreter=dap` (gdb ≥ 14).
+- **`lldb-cmake`** — uses `lldb-dap`. Works on both macOS and Linux (via the
+  `apt install lldb` above) — **use this one on Linux too**, not `gdb-cmake`.
+- **`gdb-cmake`** (Linux) — uses `gdb --interpreter=dap` (gdb ≥ 14). Kept
+  around, but gdb 15.1 (Ubuntu 24.04) has two confirmed DAP bugs that make
+  it unreliable here: `launch` doesn't wait for `configurationDone` before
+  running, so breakpoints often lose the race against a fast program and
+  never bind; and evaluating an uninitialized local (e.g. a `std::vector`
+  before its constructor runs) can hang gdb's DAP command loop
+  *permanently* — not slow, stuck — which under load can take the whole
+  machine down with it. Both were confirmed by talking to gdb's DAP
+  interpreter directly, bypassing Emacs. Neither exists in `lldb-dap`.
 
 Both **build the project first** (`cmake --build build`), then debug the
 executable found under `build/` automatically — no more LLDB's bogus `a.out`

@@ -573,13 +573,34 @@ first CMake configure; then clangd gets accurate flags with no symlinking."
 ;; instead of LLDB's bogus default of "a.out".
 
 (defun my/lldb-dap-path ()
-  "Locate an lldb-dap executable on PATH or in common macOS LLVM locations."
+  "Locate an lldb-dap executable on PATH or in common install locations."
   (or (executable-find "lldb-dap")
       (executable-find "lldb-vscode")
       (seq-find #'file-executable-p
                 (list "/opt/homebrew/opt/llvm/bin/lldb-dap"
                       "/usr/local/opt/llvm/bin/lldb-dap"
                       "/Library/Developer/CommandLineTools/usr/bin/lldb-dap"))
+      ;; Debian/Ubuntu's llvm packages only ship versioned binaries
+      ;; (lldb-dap-18, lldb-dap-19, ...), never the bare `lldb-dap' name --
+      ;; unlike lldb/lldb-server/lldb-argdumper, which DO get an unversioned
+      ;; symlink via the separate `lldb' apt package.  lldb-dap was simply
+      ;; left out of that convenience symlink set (checked directly with
+      ;; `update-alternatives --list lldb-dap`: no alternatives registered).
+      ;; So: search PATH for any `lldb-dap-N' and take the highest N.  This
+      ;; needs no maintenance when Ubuntu ships lldb-dap-19, -20, etc. --
+      ;; it was tested against lldb-dap-18 (Ubuntu 24.04 noble) but doesn't
+      ;; hardcode that version anywhere.
+      (car (sort
+            (seq-mapcat
+             (lambda (dir)
+               (and (file-directory-p dir)
+                    (directory-files dir t "\\`lldb-dap-[0-9]+\\'")))
+             exec-path)
+            (lambda (a b)
+              (> (string-to-number
+                  (car (last (split-string (file-name-nondirectory a) "-"))))
+                 (string-to-number
+                  (car (last (split-string (file-name-nondirectory b) "-"))))))))
       "lldb-dap"))                      ; bare name -> a clear "not found" error
 
 (defun my/debug-find-executable ()
@@ -605,7 +626,14 @@ returns it when there's exactly one, otherwise prompts."
 
 (use-package dape
   :init (setq dape-buffer-window-arrangement 'right
-              dape-inlay-hints t)
+              ;; Inlay hints auto-evaluate every variable visible in the
+              ;; source window on each stop.  If a breakpoint lands before a
+              ;; local's constructor has run -- e.g. a std::vector with
+              ;; garbage begin/end pointers -- evaluating it can hang gdb's
+              ;; pretty-printer instead of erroring, producing an :evaluate
+              ;; timeout.  Off by default; explicit C-c d e / C-c d w still
+              ;; work fine when you actually want a value.
+              dape-inlay-hints nil)
   :bind (("C-c d d" . dape)                      ; start / pick a debug config
          ("C-c d b" . dape-breakpoint-toggle)
          ("C-c d B" . dape-breakpoint-remove-all)
@@ -635,6 +663,20 @@ returns it when there's exactly one, otherwise prompts."
                  :cwd my/cmake-root
                  :program my/debug-find-executable
                  :stopOnEntry nil))
+  ;; NOTE: gdb 15.1's DAP mode (Ubuntu 24.04) has two confirmed bugs that
+  ;; make it unreliable for this workflow: (1) `launch' doesn't wait for
+  ;; `configurationDone' before running, so breakpoints often lose the race
+  ;; against a fast program and never bind; (2) evaluating an uninitialized
+  ;; STL object (e.g. a std::vector before its constructor runs) can hang
+  ;; gdb's DAP command loop *permanently*, taking the whole session -- and
+  ;; under load, the machine -- down with it. Neither bug exists in
+  ;; lldb-dap; prefer `lldb-cmake' on Linux too when it's available
+  ;; (`apt install lldb' -- Ubuntu ships it as a versioned binary like
+  ;; lldb-dap-18, which `my/lldb-dap-path' finds automatically).  There is
+  ;; no reliable client-side workaround for bug (1): forcing an early stop
+  ;; via `stopAtBeginningOfMainSubprogram' just trades it for bug (2), since
+  ;; dape auto-evaluates visible locals on every stop and that early stop
+  ;; lands before their constructors run.
   (add-to-list 'dape-configs
                `(gdb-cmake
                  modes (c-mode c-ts-mode c++-mode c++-ts-mode rust-mode rust-ts-mode)
@@ -657,6 +699,25 @@ returns it when there's exactly one, otherwise prompts."
       (when (equal (dape--state-reason conn) "exited")
         (run-with-timer 0 nil #'dape-quit))))
   (add-hook 'dape-stopped-hook #'my/dape-quit-on-process-exit)
+
+  ;; lldb-dap 18 crashes (free(): invalid pointer, or "terminate called
+  ;; without an active exception") if sent a :terminate or :disconnect
+  ;; request after the debuggee has already exited on its own -- confirmed
+  ;; directly against the adapter, both requests reproduce it every time.
+  ;; This isn't just our own dape-quit call above: dape.el's OWN built-in
+  ;; handler for the adapter's `terminated' event *always* calls
+  ;; `dape-kill' too, unconditionally, regardless of how the session got
+  ;; there.  So the fix has to be in `dape-kill' itself: if the connection
+  ;; already knows the debuggee is gone (state `exited' or `terminated'),
+  ;; there's nothing left alive to ask to terminate -- skip the request
+  ;; and close the connection directly instead of calling ORIG-FN.  This is
+  ;; a no-op (falls through to ORIG-FN) for any adapter/state that doesn't
+  ;; match, so it's safe cross-platform even where this bug doesn't exist.
+  (define-advice dape-kill (:around (orig-fn conn &optional cb with-disconnect) my/skip-request-if-already-exited)
+    (if (and conn (jsonrpc-running-p conn)
+             (memq (dape--state conn) '(exited terminated)))
+        (progn (dape--shutdown conn) (dape--request-continue cb))
+      (funcall orig-fn conn cb with-disconnect)))
 
   ;; The Locals/Stack/Breakpoints side windows are born from a plain 50/50
   ;; split and never grow with their content.  In the GUI that 50% is wide
