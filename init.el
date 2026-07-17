@@ -655,7 +655,28 @@ returns it when there's exactly one, otherwise prompts."
     (when-let* ((conn (dape--live-connection 'last t)))
       (when (equal (dape--state-reason conn) "exited")
         (run-with-timer 0 nil #'dape-quit))))
-  (add-hook 'dape-stopped-hook #'my/dape-quit-on-process-exit))
+  (add-hook 'dape-stopped-hook #'my/dape-quit-on-process-exit)
+
+  ;; The Locals/Stack/Breakpoints side windows are born from a plain 50/50
+  ;; split and never grow with their content.  In the GUI that 50% is wide
+  ;; enough to read; in a narrower terminal frame it isn't, which is why it
+  ;; looks fine one place and cramped the other.  Auto-fit each side window
+  ;; to its longest line (capped so it can't swallow the source window)
+  ;; every time dape refreshes the UI, so both front ends behave the same.
+  (defun my/dape-fit-info-windows ()
+    "Resize dape-info side windows to fit their buffer content."
+    (dolist (win (window-list))
+      (with-current-buffer (window-buffer win)
+        (when (derived-mode-p 'dape-info-parent-mode)
+          (let ((fit-window-to-buffer-horizontally t))
+            (fit-window-to-buffer win nil nil 100 20))))))
+  (add-hook 'dape-update-ui-hook #'my/dape-fit-info-windows))
+
+;; dape-repl is comint-derived and the debuggee's stdout often arrives with
+;; \r\n line endings (pty translation, Windows-built binaries, etc.), which
+;; Emacs renders as a literal ^M.  Strip it in every comint buffer (repl,
+;; shell, compile) instead of just dape-repl, since the cause is generic.
+(add-hook 'comint-output-filter-functions #'comint-strip-ctrl-m)
 
 ;; --- VSCode F-key debugging / navigation ------------------------------------
 ;; F5       Start or Continue   (VSCode: Start Debugging / Continue)
@@ -800,12 +821,13 @@ This is the VSCode/Option-Backspace behavior."
     (move-to-column col))
   (mc/maybe-multiple-cursors-mode))
 
-;; --- Robust, linear undo/redo (VSCode-style) ---------------------------------
+;; --- Robust, linear undo/redo (terminal-friendly) -----------------------------
+;; C-z is avoided: in a terminal it sends SIGTSTP and backgrounds Emacs.
+;; C-/ and C-M-/ both survive terminal mode (no Shift-modifier ambiguity).
 (use-package undo-fu
   :config
-  (global-set-key (kbd "C-z")   #'undo-fu-only-undo)
-  (global-set-key (kbd "C-S-z") #'undo-fu-only-redo)
-  (global-set-key (kbd "C-?")   #'undo-fu-only-redo)) ; terminal-friendly redo
+  (global-set-key (kbd "C-/")   #'undo-fu-only-undo)
+  (global-set-key (kbd "C-M-/") #'undo-fu-only-redo))
 
 (use-package undo-fu-session
   :after undo-fu
@@ -855,8 +877,8 @@ This is the VSCode/Option-Backspace behavior."
 (global-set-key (kbd "M-S-<down>") #'my/copy-line-down)   ; duplicate down
 (global-set-key (kbd "M-S-<up>")   #'my/copy-line-up)     ; duplicate up
 
-;; Comment toggle (VSCode Cmd+/).
-(global-set-key (kbd "C-/")   #'comment-line)
+;; Comment toggle (moved off C-/, which now drives undo).
+(global-set-key (kbd "M-;")   #'comment-line)
 
 ;; Quick window / buffer ops.
 (global-set-key (kbd "C-c k") #'kill-current-buffer)
@@ -874,7 +896,7 @@ This is the VSCode/Option-Backspace behavior."
 
 (use-package magit
   :bind (("C-x g" . magit-status))
-  :commands (magit-status magit-dispatch)
+  ;; :commands (magit-status magit-dispatch)
   :init (setq magit-define-global-key-bindings nil))
 
 ;; project.el is built in; just give it a friendlier search default.
@@ -899,7 +921,9 @@ This is the VSCode/Option-Backspace behavior."
 (use-package clipetty
   :hook (after-init . global-clipetty-mode))
 
-;; install nerd fonts if not installed
+;; install nerd fonts if not installed (GUI only: `find-font' can't see
+;; installed fonts from a terminal frame, so this check always "fails"
+;; and re-downloads on every -nw launch if left unguarded).
 (use-package nerd-icons
   :ensure t
   :config
@@ -910,11 +934,83 @@ This is the VSCode/Option-Backspace behavior."
          (find-font (font-spec :name font-name))))
 
   ;; 2. Automatically download the glyph pack if it's missing
-  (unless (my/font-available-p "Symbols Nerd Font Mono")
-    (message "Nerd Fonts missing! Initiating automated download...")
-    ;; This non-interactive flag forces the download without prompting you for a [y/n] confirmation
-    (nerd-icons-install-fonts t)))
+  (when (display-graphic-p)
+    (unless (my/font-available-p "Symbols Nerd Font Mono")
+      (message "Nerd Fonts missing! Initiating automated download...")
+      ;; This non-interactive flag forces the download without prompting you for a [y/n] confirmation
+      (nerd-icons-install-fonts t))))
 
+;; ADDITIONAL (UNRELATED TO CPP DEV)
+
+
+(use-package volatile-highlights
+  :defer t
+  :ensure t
+  :hook
+  (after-init . volatile-highlights-mode))
+
+;; the scratch buffer will persist between runs
+(use-package persistent-scratch
+  :ensure t
+  :defer t
+  ;; This tells use-package to load the package
+  ;; automatically after Emacs finishes initializing
+  :hook (after-init . persistent-scratch-setup-default)
+  :config
+  (progn
+    (setq scratch-buffers '("*scratch*" "*copy-log*"))
+    (persistent-scratch-autosave-mode)))
+
+(use-package saveplace
+  :defer t
+  :ensure t
+  :hook (after-init . save-place-mode)
+  :config
+  (setq save-place t) ; Enable save-place-mode
+  (setq save-place-file (concat user-emacs-directory "places"))) ; Set the save file location
+
+(use-package free-keys
+  :defer t
+  :ensure nil
+  :commands free-keys)
+
+(use-package helpful
+  :defer t
+  :ensure t
+  :bind
+  (("C-h f" . helpful-callable)
+   ("C-h v" . helpful-variable)
+   ("C-h k" . helpful-key)
+   ("C-c C-d" . helpful-at-point)
+   ("C-h F" . helpful-function)
+   ("C-h C" . helpful-command)))
+
+
+(use-package winner
+  :defer t
+  :ensure nil ;; Built-in package, so no installation is needed
+  :hook (after-init . winner-mode) ;; Enable winner-mode after Emacs starts
+  :bind (("C-c <left>"  . winner-undo)  ;; Undo window layout changes
+         ("C-c <right>" . winner-redo)) ;; Redo window layout changes
+  :custom
+  (winner-boring-buffers '("*Completions*" "*Compile-Log*" "*helm*" "*Help*"))
+  :config
+  (message "Winner mode is active!"))
+
+
+
+;; move where i mean
+(use-package mwim
+  :defer t
+  :ensure t
+  :bind
+  ("C-a" . mwim-beginning-of-code-or-line)
+  ("C-e" . mwim-end-of-code-or-line))
+
+(use-package windmove
+  :ensure nil
+  :config
+  (windmove-default-keybindings))
 
 ;;; init.el ends here
 (provide 'init)
