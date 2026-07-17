@@ -609,6 +609,7 @@ returns it when there's exactly one, otherwise prompts."
   :bind (("C-c d d" . dape)                      ; start / pick a debug config
          ("C-c d b" . dape-breakpoint-toggle)
          ("C-c d B" . dape-breakpoint-remove-all)
+         ("C-c d C" . dape-breakpoint-expression) ; conditional breakpoint at point
          ("C-c d c" . dape-continue)
          ("C-c d n" . dape-next)                 ; step over
          ("C-c d s" . dape-step-in)
@@ -670,7 +671,21 @@ returns it when there's exactly one, otherwise prompts."
         (when (derived-mode-p 'dape-info-parent-mode)
           (let ((fit-window-to-buffer-horizontally t))
             (fit-window-to-buffer win nil nil 100 20))))))
-  (add-hook 'dape-update-ui-hook #'my/dape-fit-info-windows))
+  (add-hook 'dape-update-ui-hook #'my/dape-fit-info-windows)
+
+  ;; dape's own repeat map binds "e" to dape-breakpoint-expression (asks for
+  ;; a "Condition:"), but our C-c d e goes to dape-evaluate-expression.
+  ;; Realign so bare "e" during a repeat streak matches C-c d e, and give
+  ;; the displaced conditional-breakpoint command its own key: "C".
+  (define-key dape-global-map "e" #'dape-evaluate-expression)
+  (define-key dape-global-map "C" #'dape-breakpoint-expression))
+
+;; After any `C-c d <key>' command, let the bare key repeat it: `n' keeps
+;; stepping over, `s'/`o' step in/out, `b' toggles a breakpoint, etc.  dape
+;; already tags dape-next/dape-step-in/... with Emacs's `repeat-map'
+;; property (see dape-global-map in dape.el) using the same letters as our
+;; own C-c d bindings; repeat-mode is just off by default, so turn it on.
+(repeat-mode 1)
 
 ;; dape-repl is comint-derived and the debuggee's stdout often arrives with
 ;; \r\n line endings (pty translation, Windows-built binaries, etc.), which

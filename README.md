@@ -29,11 +29,11 @@ are compiled lazily and a second start settles everything.
 | `M-Backspace` / `C-Backspace` | Delete word left — **does not copy to clipboard** |
 | `M-d` / `C-Delete` | Delete word right (also no copy) |
 | `C-c` / `C-x` / `C-v` | Copy / cut / paste when a region is selected (CUA) |
-| `C-z` / `C-S-z` | Undo / redo (linear, like VSCode; `C-?` also redoes in a terminal) |
+| `C-/` / `C-M-/` | Undo / redo (linear, like VSCode). Not `C-z` — that backgrounds Emacs in a terminal |
 | `C-a` / `Home` | Smart Home: first non-whitespace, then column 0 |
 | `M-↑` / `M-↓` | Move line/region up / down |
 | `M-S-↑` / `M-S-↓` | Duplicate line up / down |
-| `C-/` | Toggle comment on the line/region |
+| `M-;` | Toggle comment on the line/region |
 | `C-=` / `C-+` | Expand / shrink selection by semantic unit |
 | Type with a region active | Replaces the selection |
 
@@ -163,10 +163,19 @@ For plain Makefiles just use `C-c c c` and type `make` (it remembers it for
 |-----|--------|
 | `C-c d d` | Start — pick an lldb or gdb configuration |
 | `C-c d b` / `C-c d B` | Toggle breakpoint / remove all |
+| `C-c d C` | Conditional breakpoint at point (prompts `Condition:`) |
 | `C-c d c` | Continue |
 | `C-c d n` / `C-c d s` / `C-c d o` | Step over / into / out |
 | `C-c d r` / `C-c d p` / `C-c d q` | Restart / pause / quit |
 | `C-c d i` / `C-c d R` | Info windows (locals, stack) / debug REPL |
+| `C-c d e` | Evaluate expression at point / minibuffer |
+
+**Repeating without the prefix:** right after any `C-c d <key>` command runs,
+Emacs's `repeat-mode` lets you press the bare letter again — `n n n` keeps
+stepping over, `s`/`o` step in/out, `b` toggles a breakpoint, `C` sets a
+conditional breakpoint, `e` evaluates — no need to retype `C-c d` each time.
+The streak ends the moment you press a key that isn't in the map. Full list:
+`M-x describe-repeat-maps`.
 
 At the `C-c d d` prompt pick one of the ready-made configs:
 
@@ -179,6 +188,28 @@ default. If `build/` has more than one executable, you'll be asked which to
 debug; if it has none, you'll be prompted for a path (build first with
 `C-c c b`). The plain built-in `dape` configs still exist if you want to point
 at an adapter/program manually.
+
+**Conditional breakpoint example** — say you're chasing a bug that only shows
+up on the 100th iteration of a loop:
+
+```c
+for (int i = 0; i < 1000; i++) {
+    process(i);       // <- put point on this line
+}
+```
+
+1. Put point on the `process(i)` line and press `C-c d C`.
+2. At the `Condition:` prompt, type `i == 100` and hit Enter.
+3. `C-c d c` (continue) — execution now runs freely and only stops when
+   `i` reaches 100, instead of you stepping through 99 boring iterations
+   or babysitting a plain breakpoint.
+4. To clear it, put point back on the line, press `C-c d C` again, and
+   submit an empty string.
+
+Works with any boolean expression the debuggee's language understands —
+`ptr == NULL`, `count > threshold`, `strcmp(name, "bob") == 0`, etc. Combine
+with `C-c d w` (watch an expression) to see it update live in the Watch panel
+as you continue/step.
 
 **Extras:** `C-c x d` disassembles the function at point (needs `objdump`).
 `C-c l f` formats on demand, `C-c l a` runs clang-tidy/clangd quick-fixes,
