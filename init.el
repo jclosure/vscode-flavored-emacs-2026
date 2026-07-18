@@ -929,6 +929,43 @@ behavior."
           (target (save-excursion (forward-word (- arg)) (point))))
       (delete-region start (max target (line-beginning-position))))))
 
+;; --- Jump to the matching brace/paren/bracket/quote, vi-%/VSCode-Go-to-Bracket
+;; A hand-rolled version of this (using the syntax table directly) got
+;; confused in C++: template angle brackets (`vector<int>') aren't a real
+;; delimiter pair, but naive bracket-scanning doesn't know that, so it could
+;; overshoot.  smartparens' own sexp-scanning already knows exactly which
+;; characters are configured as real pairs per major mode, so delegate to it
+;; instead of re-deriving that logic by hand.
+(use-package smartparens
+  :config (require 'smartparens-config))
+
+(defun my/goto-match-paren ()
+  "Jump to the matching delimiter: parens, brackets, braces, or quotes.
+Works whether point sits just before an opening delimiter or just
+after a closing one.  Call again from the destination to jump back.
+If a region is active (e.g. after C-SPC), the jump extends the
+selection instead of collapsing it -- Emacs deactivates the mark
+after any command by default unless told not to."
+  (interactive)
+  (setq deactivate-mark nil)
+  (let ((forward (sp-get-sexp))
+        (backward (sp-get-sexp t)))
+    (cond
+     ((and forward (= (plist-get forward :beg) (point)))
+      (goto-char (plist-get forward :end)))
+     ((and backward (= (plist-get backward :end) (point)))
+      (goto-char (plist-get backward :beg)))
+     (t (message "Not on a matching delimiter")))))
+;; Deliberately NOT on a C-c/C-x/C-v prefix: cua-mode rebinds all three of
+;; those to fire copy/cut/paste immediately whenever a region is active
+;; (with only a brief timing-based window to fall through to their normal
+;; prefix-key role), so C-c <letter> is unreachable -- typing the second
+;; key just self-inserts and replaces the selection.  That timing window
+;; is also tuned for local keyboard latency, not SSH, so it's especially
+;; unreliable here.  C-% isn't one of the three keys CUA intercepts, so
+;; it works the same whether or not a region is active.
+(global-set-key (kbd "C-%") #'my/goto-match-paren)
+
 ;; --- Smart Home: bounce between first non-whitespace and column 0 ------------
 (defun my/smart-beginning-of-line ()
   "Move to first non-whitespace char; press again to go to column 0 (VSCode Home)."

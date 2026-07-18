@@ -35,10 +35,21 @@ are compiled lazily and a second start settles everything.
 | `M-S-↑` / `M-S-↓` | Duplicate line up / down |
 | `M-;` | Toggle comment on the line/region |
 | `C-=` / `C-+` | Expand / shrink selection by semantic unit |
+| `C-%` | Jump to the matching paren/bracket/brace/quote; press again to jump back |
 | Type with a region active | Replaces the selection |
 
 Word motion (`M-f` / `M-b` and `M-Backspace`) already matches macOS VSCode's
 Option-arrow/Option-Delete stops, so no remap was needed there.
+
+The matching delimiter is also highlighted automatically as you move over
+it (`show-paren-mode`, no key needed) — `C-%` is for actually jumping there.
+It's powered by `smartparens`, so it understands real delimiter pairs per
+language (e.g. it won't misfire on C++ template `<>`, which aren't a real
+pair) instead of naively matching characters. `C-%` also extends the
+selection if one is active (`C-SPC` first, then `C-%`) — deliberately not
+on a `C-c`/`C-x`/`C-v` prefix, since cua-mode hijacks those three specific
+keys to fire copy/cut/paste immediately whenever a region is active, which
+makes any `C-c <letter>` binding unreachable in that moment.
 
 ## Multiple cursors (VSCode-style)
 
