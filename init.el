@@ -917,9 +917,17 @@ With prefix ARG, delete that many words."
 
 (defun my/backward-delete-word (arg)
   "Delete characters backward to start of word.  Do NOT save to the kill ring.
-This is the VSCode/Option-Backspace behavior."
+This is the VSCode/Option-Backspace behavior: stops at the left margin
+instead of crossing into the line above.  Pressed again right at column
+0, it deletes the newline, joining with the line above -- also VSCode's
+behavior."
   (interactive "p")
-  (my/delete-word (- arg)))
+  (if (bolp)
+      (unless (bobp)
+        (delete-char -1))
+    (let ((start (point))
+          (target (save-excursion (forward-word (- arg)) (point))))
+      (delete-region start (max target (line-beginning-position))))))
 
 ;; --- Smart Home: bounce between first non-whitespace and column 0 ------------
 (defun my/smart-beginning-of-line ()
