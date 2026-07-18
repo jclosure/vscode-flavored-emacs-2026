@@ -14,18 +14,23 @@ int main() {
     std::cout << "sum   = " << total << '\n';
     std::cout << "max   = " << demo::max_element(numbers) << '\n';
 
+    // series
     for (int n = 1; n <= 6; ++n) {
         std::cout << n << "! = " << demo::factorial(n) << "   fib(" << n
                   << ") = " << demo::fibonacci(n) << '\n';
     }
 
+    // primes
+    std::vector<int> primes;
     std::cout << "primes <= 20:";
-    for (int n = 2; n <= 20; ++n) {
-        if (demo::is_prime(n)) {
-            std::cout << ' ' << n;
+    for (int i = 2; i <= 20; ++i) {
+        if (demo::is_prime(i)) {
+            primes.push_back(i);
+            std::cout << ' ' << i;
         }
     }
     std::cout << '\n';
+    std::cout << "sum of primes = " << demo::sum(primes) << '\n';
 
     return 0;
 }
