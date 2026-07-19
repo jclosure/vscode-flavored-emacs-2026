@@ -4,6 +4,8 @@ A fast, modern, VSCode-flavored Emacs setup. Built around `use-package`,
 tree-sitter, `eglot` (LSP), `vertico`/`corfu` completion, and Catppuccin.
 Works equally well in the GUI and the terminal (`emacs -nw`).
 
+**Demo video:** [Remote C++ Development Over SSH: No GUI Required](https://www.youtube.com/watch?v=HLhSy1cB6Lw) — IntelliSense, symbol navigation, refactoring, and debugging, all running over a plain SSH session.
+
 ## First launch
 
 The very first start downloads ~30 packages from ELPA/MELPA, so it takes a
