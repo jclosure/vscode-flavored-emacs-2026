@@ -1,0 +1,17 @@
+;;; -*- coding: utf-8; mode: lisp-data -*-
+(("/home/user/.emacs.d/init.el" . 9710)
+ ("/home/user/.emacs.d/elpa/embark-consult-1.2/embark-consult.el" . 19)
+ ("/home/user/.zshrc" . 8502)
+ ("/home/user/.dotfiles/"
+  (dired-filename . "/home/user/.dotfiles/clipboard_wrapper.zsh"))
+ ("/home/user/.emacs.d/cpp-demo/src/main.cpp" . 765)
+ ("/home/user/.emacs.d/cpp-demo/include/mathutils.hpp" . 252)
+ ("/home/user/.emacs.d/cpp-demo/"
+  (dired-filename . "/home/user/.emacs.d/cpp-demo/include"))
+ ("/home/user/.emacs.d/cpp-demo/src/"
+  (dired-filename . "/home/user/.emacs.d/cpp-demo/src/.."))
+ ("/home/user/.emacs.d/cpp-demo/include/"
+  (dired-filename . "/home/user/.emacs.d/cpp-demo/include/.."))
+ ("/home/user/.emacs.d/cpp-demo/src/mathutils.cpp" . 518)
+ ("/usr/include/c++/13/bits/stl_vector.h" . 18235)
+ ("/usr/include/c++/13/iostream" . 2082))
