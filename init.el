@@ -490,6 +490,21 @@ stays fast, and never throws a popup for a server you haven't installed."
                     "--header-insertion=iwyu"
                     "--header-insertion-decorators=0"
                     "--pch-storage=memory"
+                    ;; Without this, clangd's own GCC-toolchain
+                    ;; auto-detection can silently disagree with the
+                    ;; compiler compile_commands.json actually recorded --
+                    ;; e.g. on a system with both gcc-13 (full C++ headers)
+                    ;; and a partial gcc-14 (C only, no headers) installed
+                    ;; side by side, clangd defaulted to the newest version
+                    ;; number regardless of which one the project actually
+                    ;; built with, producing bogus "'vector' file not
+                    ;; found" errors on a project that compiles fine. This
+                    ;; lets clangd actually invoke whatever gcc/g++/clang
+                    ;; driver compile_commands.json names, to ask it
+                    ;; directly for its real search paths, instead of
+                    ;; guessing. No hardcoded path/version -- portable
+                    ;; across machines and GCC/Clang versions.
+                    "--query-driver=/usr/bin/**,/usr/local/bin/**,/opt/homebrew/**/bin/**"
                     "-j=4"))))
 
 ;; --- CMake & Makefile editing -----------------------------------------------
