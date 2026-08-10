@@ -35,3 +35,6 @@ a.out
 .DS_Store
 ._*
 Thumbs.db
+
+# Save-place state — pure runtime data, shouldn't be tracked
+/places
