@@ -1265,13 +1265,27 @@ after any command by default unless told not to."
 ;; means the (forwarded) local gpg-agent uses ITS OWN pinentry-program
 ;; (pinentry-qt) on the client, popping the PIN/touch prompt there.
 
-;; Convenience: C-c C-m e p / C-c C-m e s toggle whole-message encrypt/sign in
-;; a compose buffer (standard mml/message-mode bindings, no extra config
-;; needed). This adds one more: toggle encryption with a single command.
+;; The real standard mml/message-mode bindings for whole-message PGP/MIME are
+;; C-c C-m c p (encrypt) and C-c C-m s p (sign) - NOT "C-c C-m e p"/"e s" as
+;; an earlier version of this comment claimed; "e" under that prefix is
+;; mml-attach-external, unrelated. Also: C-m itself is a fragile key to rely
+;; on at all in a terminal session (emacs -nw over ssh) - it's historically
+;; the same byte as plain RET, and a terminal using a modern keyboard
+;; protocol to disambiguate them (Ghostty/cmux does) can leak raw escape
+;; bytes into the buffer as literal text if Emacs doesn't fully consume the
+;; sequence, instead of the chord registering at all. M-x sidesteps this
+;; entirely (no raw terminal key parsing involved), hence these two
+;; convenience wrappers - prefer M-x my/mu4e-toggle-encryption / -signing
+;; over the raw C-c C-m keychords in a terminal session.
 (defun my/mu4e-toggle-encryption ()
   "Toggle PGP/MIME encryption for the current message."
   (interactive)
   (mml-secure-message-encrypt-pgpmime))
+
+(defun my/mu4e-toggle-signing ()
+  "Toggle PGP/MIME signing for the current message."
+  (interactive)
+  (mml-secure-message-sign-pgpmime))
 
 (provide 'init-mu4e)
 
