@@ -1224,7 +1224,14 @@ after any command by default unless told not to."
 ;;; forward (see ~/.ssh/config Host ubuntu.local on the client side). PIN and
 ;;; touch prompts appear on the *client* machine, not here.
 ;;; ----------------------------------------------------------------------------
-(add-to-list 'load-path "/usr/share/emacs/site-lisp/elpa/mu4e-1.10.8")
+(let ((mu4e-dir
+       (car (append
+             (file-expand-wildcards "/usr/share/emacs/site-lisp/elpa/mu4e-*")
+             (file-expand-wildcards "/opt/homebrew/Cellar/mu/*/share/emacs/site-lisp/mu/mu4e")
+             (file-expand-wildcards "/usr/local/Cellar/mu/*/share/emacs/site-lisp/mu/mu4e")))))
+  (if mu4e-dir
+      (add-to-list 'load-path mu4e-dir)
+    (warn "mu4e: could not find an installed mu4e on this machine (apt mu4e-elpa or brew mu)")))
 (require 'mu4e)
 
 (setq mu4e-maildir "~/Mail"
