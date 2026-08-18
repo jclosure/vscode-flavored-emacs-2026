@@ -1265,6 +1265,20 @@ after any command by default unless told not to."
 ;; means the (forwarded) local gpg-agent uses ITS OWN pinentry-program
 ;; (pinentry-qt) on the client, popping the PIN/touch prompt there.
 
+;; Signature verification on incoming mail (mm-decode, not mml2015 - separate
+;; layer, separate defaults). mm-decrypt-option defaults to nil, which Gnus
+;; treats as "ask" - that's why decrypting already worked with no setup here.
+;; mm-verify-option's default is the literal symbol 'never - explicitly
+;; suppressed, not "ask" - so a signed message's signature was never actually
+;; being checked, no matter what key you pressed; there's no dedicated
+;; "verify" key in mu4e, it's supposed to just happen automatically on open,
+;; same as decrypt. gnus-buttonized-mime-types needs multipart/signed added
+;; too, or 'always here still won't render the result inline (see the
+;; mm-verify-option docstring).
+(require 'gnus-art) ; gnus-buttonized-mime-types lives here, not autoloaded
+(setq mm-verify-option 'always)
+(add-to-list 'gnus-buttonized-mime-types "multipart/signed")
+
 ;; The real standard mml/message-mode bindings for whole-message PGP/MIME are
 ;; C-c C-m c p (encrypt) and C-c C-m s p (sign) - NOT "C-c C-m e p"/"e s" as
 ;; an earlier version of this comment claimed; "e" under that prefix is
