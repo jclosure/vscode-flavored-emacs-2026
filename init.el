@@ -1218,5 +1218,55 @@ after any command by default unless told not to."
   :config
   (windmove-default-keybindings))
 
+;;; ----------------------------------------------------------------------------
+;;; Mail: mu4e + mbsync (Gmail), signed/encrypted via the YubiKey OpenPGP card
+;;; forwarded from the local machine over the ssh gpg-agent-extra-socket
+;;; forward (see ~/.ssh/config Host ubuntu.local on the client side). PIN and
+;;; touch prompts appear on the *client* machine, not here.
+;;; ----------------------------------------------------------------------------
+(add-to-list 'load-path "/usr/share/emacs/site-lisp/elpa/mu4e-1.10.8")
+(require 'mu4e)
+
+(setq mu4e-maildir "~/Mail"
+      mu4e-get-mail-command "mbsync -a"
+      mu4e-update-interval 300 ; Update every 5 minutes
+      mu4e-attachment-dir  "~/Downloads"
+      mu4e-change-filenames-when-moving t) ; mbsync/maildir-friendly renames
+
+;; Configure folders (Gmail uses [Gmail]/...)
+(setq mu4e-drafts-folder "/[Gmail]/Drafts"
+      mu4e-sent-folder   "/[Gmail]/Sent Mail"
+      mu4e-trash-folder  "/[Gmail]/Trash"
+      mu4e-refile-folder "/[Gmail]/All Mail")
+
+;; Sending Mail via SMTP (Emacs' built-in smtpmail, no local MTA needed)
+(setq message-send-mail-function 'smtpmail-send-it
+      smtpmail-starttls-credentials '(("smtp.gmail.com" 587 nil nil))
+      smtpmail-default-smtp-server "smtp.gmail.com"
+      smtpmail-smtp-server "smtp.gmail.com"
+      smtpmail-smtp-service 587)
+
+(setq user-mail-address "jclosure@gmail.com"
+      user-full-name    "Joel Holder")
+
+;;; --- PGP/MIME signing & encryption (mml2015 -> gpg -> forwarded agent) -----
+(require 'mml2015)
+(setq mml2015-use 'epg               ; use Emacs' epg.el, talks to gpg/gpg-agent
+      mml2015-encrypt-to-self t      ; always add yourself as a recipient too
+      mml2015-sign-with-sender t)    ; pick the signing key from the From: address
+;; Don't set epg-pinentry-mode to 'loopback here: leaving it at the default
+;; means the (forwarded) local gpg-agent uses ITS OWN pinentry-program
+;; (pinentry-qt) on the client, popping the PIN/touch prompt there.
+
+;; Convenience: C-c C-m e p / C-c C-m e s toggle whole-message encrypt/sign in
+;; a compose buffer (standard mml/message-mode bindings, no extra config
+;; needed). This adds one more: toggle encryption with a single command.
+(defun my/mu4e-toggle-encryption ()
+  "Toggle PGP/MIME encryption for the current message."
+  (interactive)
+  (mml-secure-message-encrypt-pgpmime))
+
+(provide 'init-mu4e)
+
 ;;; init.el ends here
 (provide 'init)
