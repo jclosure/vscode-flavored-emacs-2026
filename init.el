@@ -1301,6 +1301,55 @@ after any command by default unless told not to."
   (interactive)
   (mml-secure-message-sign-pgpmime))
 
+;; g (mu4e-view-go-to-url) relies on mu4e's own regex-based buffer scan
+;; (mu4e--view-linkify-buffer-text, in mu4e-view.el), which only catches URLs
+;; that appear as literal visible text. shr (Emacs's HTML renderer, which
+;; mu4e uses for HTML mail) has a TTY-specific rendering path: on a graphic
+;; frame links render one way, but in a terminal (emacs -nw, e.g. any ssh
+;; session) it instead embeds the URL as a hidden/invisible bracketed
+;; annotation right after the link text - real buffer text, but mu4e's
+;; regex scanner still misses it in practice on these emails, so g reports
+;; "No links for this message" even though the link is right there and
+;; genuinely clickable via TAB + RET (which goes through shr's own keymap,
+;; not mu4e's scanner, and always worked). Confirmed 2026-08-18: same email,
+;; g works fine in GUI Emacs, fails every time over ssh/emacs -nw.
+;;
+;; Fix: read shr's own 'shr-url text property directly instead of relying on
+;; mu4e's regex - the exact same property/traversal shr itself uses
+;; internally (see shr.el's own use of next-single-property-change on
+;; 'shr-url), so this works regardless of how shr chose to render the link.
+(defun my/mu4e-view-collect-shr-urls ()
+  "Collect distinct URLs from `shr-url' text properties in the
+current buffer, in document order."
+  (let (urls (pos (point-min)))
+    (while (< pos (point-max))
+      (let ((url (get-text-property pos 'shr-url)))
+        (when (and url (not (member url urls)))
+          (push url urls)))
+      (setq pos (or (next-single-property-change pos 'shr-url) (point-max))))
+    (nreverse urls)))
+
+(defun my/mu4e-view-go-to-url (&optional _multi)
+  "Like `mu4e-view-go-to-url', but finds links via shr's own
+'shr-url text properties instead of mu4e's regex-based buffer scan -
+see the comment above for why that scan misses some real,
+shr-rendered links in a terminal session."
+  (interactive "P")
+  (let ((urls (my/mu4e-view-collect-shr-urls)))
+    (cond
+     ((null urls) (mu4e-error "No links for this message"))
+     ((= (length urls) 1)
+      (let ((url (car urls)))
+        (if (string-prefix-p "mailto:" url)
+            (browse-url-mail url)
+          (browse-url url))))
+     (t (let ((choice (completing-read "URL to visit: " urls nil t)))
+          (if (string-prefix-p "mailto:" choice)
+              (browse-url-mail choice)
+            (browse-url choice)))))))
+
+(define-key mu4e-view-mode-map (kbd "g") #'my/mu4e-view-go-to-url)
+
 (provide 'init-mu4e)
 
 ;;; init.el ends here
