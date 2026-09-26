@@ -312,9 +312,11 @@
   :after corfu
   :config (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
 
-;; Render the Corfu popup in text terminals.
+;; Render the Corfu popup in text terminals. Only needed before Emacs 31:
+;; with tty child frames Corfu draws its popup in a terminal on its own,
+;; and warns "`corfu-terminal' is not needed" if this package loads anyway.
 (use-package corfu-terminal
-  :unless (display-graphic-p)
+  :unless (or (display-graphic-p) (featurep 'tty-child-frames))
   :after corfu
   :config (corfu-terminal-mode 1))
 
