@@ -1231,8 +1231,12 @@ after any command by default unless told not to."
              (file-expand-wildcards "/usr/local/Cellar/mu/*/share/emacs/site-lisp/mu/mu4e")))))
   (if mu4e-dir
       (add-to-list 'load-path mu4e-dir)
-    (warn "mu4e: could not find an installed mu4e on this machine (apt mu4e-elpa or brew mu)")))
-(require 'mu4e)
+    (message "mu4e: not installed on this machine (apt mu4e-elpa or brew mu); mail disabled")))
+;; Soft require: mu/mu4e has no native Windows build, and a hard failure here
+;; would abort init. Everything below is plain setq/defun on top of built-in
+;; libraries (smtpmail, mml2015, gnus-art), so it's harmless without mu4e;
+;; the one mu4e-dependent form (the keymap binding) waits on eval-after-load.
+(require 'mu4e nil t)
 
 (setq mu4e-maildir "~/Mail"
       mu4e-get-mail-command "mbsync -a"
@@ -1348,7 +1352,8 @@ shr-rendered links in a terminal session."
               (browse-url-mail choice)
             (browse-url choice)))))))
 
-(define-key mu4e-view-mode-map (kbd "g") #'my/mu4e-view-go-to-url)
+(with-eval-after-load 'mu4e
+  (define-key mu4e-view-mode-map (kbd "g") #'my/mu4e-view-go-to-url))
 
 (provide 'init-mu4e)
 

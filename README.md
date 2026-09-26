@@ -344,6 +344,28 @@ built-in **Modus Operandi** light theme. Change the flavor by setting
 
 For GUI icons run once: `M-x nerd-icons-install-fonts`.
 
+## Windows
+
+Primarily built for Linux and macOS, but native Windows Emacs works for
+everything except mail. A few things differ:
+
+- **`HOME`.** Set a user `HOME` environment variable (for example,
+  `C:\Users\you`). Without it, Emacs looks for `~/.emacs.d` under
+  `%APPDATA%`.
+- **Mail is skipped.** mu/mu4e has no native Windows build. The config
+  detects that, prints `mu4e: not installed ... mail disabled`, and loads
+  everything else. For mail, run Emacs under WSL or over SSH on a Linux box.
+- **Tree-sitter grammars** are compiled on demand, which needs a C compiler
+  on `PATH`. Install MSYS2's mingw gcc (`pacman -S mingw-w64-ucrt-x86_64-gcc`
+  and add `C:\msys64\ucrt64\bin` to `PATH`), or put prebuilt grammar DLLs in
+  `var/treesit/`.
+- **Tools** (clangd, lldb-dap, rg, gpg) aren't found at the Unix/Homebrew paths
+  the config adds. Put them on `PATH` instead:
+  `winget install LLVM.LLVM BurntSushi.ripgrep.MSVC GnuPG.Gpg4win`.
+- **Nerd Fonts:** `M-x nerd-icons-install-fonts` only downloads the font
+  files on Windows. Install them yourself (right-click → Install), then
+  restart Emacs.
+
 ## Files
 
 - `early-init.el` — pre-frame startup tuning.
