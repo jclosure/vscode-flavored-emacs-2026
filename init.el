@@ -156,7 +156,7 @@
     (dolist (f '("JetBrainsMono Nerd Font" "JetBrains Mono" "Fira Code"
                  "Cascadia Code" "Hack" "Menlo" "DejaVu Sans Mono"))
       (when (find-font (font-spec :name f))
-        (set-face-attribute 'default nil :family f :height 150) ; 15pt (was 130/13pt)
+        (set-face-attribute 'default nil :family f :height 180) ; 18pt
         (throw 'done t)))))
 
 ;;; ----------------------------------------------------------------------------
