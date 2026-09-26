@@ -1141,12 +1141,35 @@ after any command by default unless told not to."
     (and (fboundp 'find-font)
          (find-font (font-spec :name font-name))))
 
-  ;; 2. Automatically download the glyph pack if it's missing
+  ;; 2. Windows: `nerd-icons-install-fonts' only knows the Linux/macOS font
+  ;; dirs, so on Windows it prompts for a "Font installation directory" and
+  ;; then just downloads the file -- Windows fonts must also be registered,
+  ;; so the font stays missing and the prompt comes back every launch.
+  ;; Install per-user instead: same file, into the user font dir, registered
+  ;; under HKCU (no admin). Takes effect on the next Emacs start.
+  (defun my/install-nerd-icons-font-windows ()
+    "Download and register the nerd-icons font for the current Windows user."
+    (interactive)
+    (let* ((dir (expand-file-name "Microsoft/Windows/Fonts/" (getenv "LOCALAPPDATA")))
+           (dest (expand-file-name "SymbolsNerdFontMono-Regular.ttf" dir))
+           (win-dest (subst-char-in-string ?/ ?\\ dest)))
+      (make-directory dir t)
+      (url-copy-file "https://raw.githubusercontent.com/rainstormstudio/nerd-icons.el/main/fonts/NFM.ttf"
+                     dest t)
+      (call-process "reg" nil nil nil "add"
+                    "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+                    "/v" "Symbols Nerd Font Mono (TrueType)" "/t" "REG_SZ"
+                    "/d" win-dest "/f")
+      (message "Installed Symbols Nerd Font Mono to %s -- restart Emacs to use it" win-dest)))
+
+  ;; 3. Automatically download the glyph pack if it's missing
   (when (display-graphic-p)
     (unless (my/font-available-p "Symbols Nerd Font Mono")
       (message "Nerd Fonts missing! Initiating automated download...")
-      ;; This non-interactive flag forces the download without prompting you for a [y/n] confirmation
-      (nerd-icons-install-fonts t))))
+      (if (eq system-type 'windows-nt)
+          (my/install-nerd-icons-font-windows)
+        ;; This non-interactive flag forces the download without prompting you for a [y/n] confirmation
+        (nerd-icons-install-fonts t)))))
 
 ;; ADDITIONAL (UNRELATED TO CPP DEV)
 
