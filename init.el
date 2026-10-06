@@ -1308,6 +1308,14 @@ after any command by default unless told not to."
 (setq mm-verify-option 'always)
 (add-to-list 'gnus-buttonized-mime-types "multipart/signed")
 
+;; Color the existing Gnus/mu4e MIME buttons without enabling the
+;; multipart/alternative chooser buttons.  Keep this face-only: no mouse-map
+;; changes and no background color, to avoid terminal click artifacts.
+(defface my/mu4e-mime-button-face
+  '((t :foreground "cyan" :weight bold :underline t))
+  "Face for mu4e/Gnus MIME and attachment buttons.")
+(setq gnus-article-button-face 'my/mu4e-mime-button-face)
+
 ;; The real standard mml/message-mode bindings for whole-message PGP/MIME are
 ;; C-c C-m c p (encrypt) and C-c C-m s p (sign) - NOT "C-c C-m e p"/"e s" as
 ;; an earlier version of this comment claimed; "e" under that prefix is
