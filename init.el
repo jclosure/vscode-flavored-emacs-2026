@@ -1377,8 +1377,148 @@ shr-rendered links in a terminal session."
               (browse-url-mail choice)
             (browse-url choice)))))))
 
+(defun my/mu4e-headers-mouse-1-view-message (event)
+  "Open the mu4e header clicked by mouse EVENT."
+  (interactive "e")
+  (let ((pos (posn-point (event-end event)))
+        (window (posn-window (event-end event))))
+    (when (and (windowp window) (integer-or-marker-p pos))
+      (select-window window)
+      (goto-char pos)
+      (mu4e-headers-view-message))))
+
 (with-eval-after-load 'mu4e
-  (define-key mu4e-view-mode-map (kbd "g") #'my/mu4e-view-go-to-url))
+  (define-key mu4e-view-mode-map (kbd "g") #'my/mu4e-view-go-to-url)
+  ;; Mouse convenience: left-click a message in the headers list to open it.
+  ;; Do not bind mouse-4/mouse-5; terminal Emacs often reports scroll wheel
+  ;; events as those buttons.
+  (define-key mu4e-headers-mode-map [mouse-1] #'my/mu4e-headers-mouse-1-view-message)
+  ;; Also bind at mu4e-view level.  shr links have their own keymap below, but
+  ;; this gives us a fallback if terminal mouse events bypass the shr map.
+  (define-key mu4e-view-mode-map [mouse-1] #'my/shr-browse-url-mouse)
+  (define-key mu4e-view-mode-map [C-mouse-1] #'my/shr-browse-url-mouse))
+
+(defun my/shr-url-at-or-near (pos)
+  "Return the `shr-url' at POS or a few chars around it."
+  (when (integer-or-marker-p pos)
+    (catch 'url
+      (dolist (p (number-sequence (max (point-min) (- pos 3))
+                                  (min (point-max) (+ pos 3))))
+        (let ((url (or (get-text-property p 'shr-url)
+                       (get-text-property (max (point-min) (1- p)) 'shr-url))))
+          (when url
+            (throw 'url url)))))))
+
+(defun my/shr-browse-url-mouse (event)
+  "Open the shr URL clicked by mouse EVENT via `browse-url'.
+This is for terminal Emacs/mu4e: HTML links like \"View Message\" are not
+literal URLs, so the terminal cannot open them; Emacs must read the hidden
+`shr-url' property and pass it to our `browse-url' ssh-back opener."
+  (interactive "e")
+  (let* ((pos (posn-point (event-end event)))
+         (window (posn-window (event-end event)))
+         url)
+    ;; Important: mouse events may arrive while another window/buffer is still
+    ;; current.  Text properties are buffer-local, so select/use the clicked
+    ;; window's buffer before reading `shr-url'.  Batch tests had the right
+    ;; buffer current already; real mouse clicks in mu4e often do not.
+    (when (windowp window)
+      (select-window window))
+    (setq url (my/shr-url-at-or-near pos))
+    (if url
+        (browse-url url)
+      (message "No shr-url at click position"))))
+
+(with-eval-after-load 'shr
+  ;; The proper place to make HTML mail links mouse-clickable is `shr-map',
+  ;; not `mu4e-view-mode-map': shr puts this local keymap on rendered link
+  ;; text.  Bind mouse-1 only; binding down-mouse-1 as well double-opens.
+  (define-key shr-map [mouse-1] #'my/shr-browse-url-mouse)
+  (define-key shr-map [C-mouse-1] #'my/shr-browse-url-mouse))
+
+;; browse-url over ssh: this Emacs instance may run -nw on ubuntu while the
+;; browser we actually want is on the SSH client.  If that client is Windows,
+;; ask it to run PowerShell Start-Process; otherwise ask it to run a small
+;; bash snippet using xdg-open/open.  If that SSH-back path is unavailable,
+;; fall back to OSC 52 so the URL at least lands in the local clipboard.
+(defvar my/ssh-client-user "joel_"
+  "Account to ssh back to when opening URLs from remote Emacs.")
+
+(defun my/osc52-copy-to-local-clipboard (text)
+  "Copy TEXT into the local machine's system clipboard via OSC 52,
+even when Emacs is running remotely under `emacs -nw' over ssh."
+  (let ((b64 (base64-encode-string (encode-coding-string text 'utf-8 t) t)))
+    (send-string-to-terminal (format "\e]52;c;%s\a" b64))))
+
+(defun my/ssh-client-target ()
+  "Return user@host for the machine that initiated this SSH session."
+  (when-let* ((ssh-client (getenv "SSH_CLIENT"))
+              (client-host (car (split-string ssh-client))))
+    (format "%s@%s" my/ssh-client-user client-host)))
+
+(defconst my/ssh-back-options
+  '("-o" "BatchMode=yes"
+    "-o" "ConnectTimeout=3"
+    "-o" "StrictHostKeyChecking=accept-new"))
+
+(defun my/ssh-client-windows-p (ssh target)
+  "Return non-nil if TARGET looks like a Windows OpenSSH server."
+  (zerop (apply #'call-process ssh nil nil nil
+                (append my/ssh-back-options
+                        (list target "cmd.exe" "/c" "ver")))))
+
+(defun my/open-url-via-forwarder (url)
+  "Open URL through the launcher-provided local HTTP forwarder."
+  (when-let* ((endpoint (getenv "MU4E_OPEN_URL_ENDPOINT"))
+              (curl (executable-find "curl")))
+    (zerop
+     (call-process curl nil nil nil
+                   "--max-time" "2"
+                   "--silent" "--show-error" "--fail"
+                   "--request" "POST"
+                   "--data-urlencode" (concat "url=" url)
+                   endpoint))))
+
+(defun my/open-url-on-ssh-client (url)
+  "Open URL in the browser on the machine that initiated this SSH session.
+Return non-nil if the request was successfully handed off."
+  (or (my/open-url-via-forwarder url)
+      (when-let* ((target (my/ssh-client-target))
+                  (ssh (executable-find "ssh")))
+        (if (my/ssh-client-windows-p ssh target)
+            ;; Fallback for Windows clients when the fast forwarded opener is
+            ;; unavailable.  Encode the whole PowerShell command as UTF-16LE
+            ;; base64 so long tracking URLs survive command-line parsing.
+            (let* ((quoted-url (replace-regexp-in-string "'" "''" url t t))
+                   (ps-command (format "Start-Process -FilePath '%s'" quoted-url))
+                   (encoded-command
+                    (base64-encode-string
+                     (encode-coding-string ps-command 'utf-16le t) t)))
+              (zerop
+               (apply #'call-process ssh nil nil nil
+                      (append my/ssh-back-options
+                              (list target
+                                    "powershell.exe" "-NoProfile" "-NonInteractive"
+                                    "-EncodedCommand" encoded-command)))))
+          (zerop
+           (apply #'call-process ssh nil nil nil
+                  (append my/ssh-back-options
+                          (list target
+                                "bash" "-lc"
+                                "url=$1; if command -v xdg-open >/dev/null 2>&1; then nohup xdg-open \"$url\" >/dev/null 2>&1 & elif command -v open >/dev/null 2>&1; then nohup open \"$url\" >/dev/null 2>&1 & else exit 127; fi"
+                                "bash" url))))))))
+
+(defun my/browse-url-local-aware (url &rest args)
+  "`browse-url-browser-function' that opens URLs on the local SSH client.
+Use the normal browser for graphical/local Emacs; over SSH, open on the
+client via ssh, with OSC 52 clipboard fallback."
+  (if (or (display-graphic-p) (not (getenv "SSH_CLIENT")))
+      (apply #'browse-url-default-browser url args)
+    (unless (my/open-url-on-ssh-client url)
+      (my/osc52-copy-to-local-clipboard url)
+      (message "Could not open browser on SSH client; copied link to local clipboard: %s" url))))
+
+(setq browse-url-browser-function #'my/browse-url-local-aware)
 
 (provide 'init-mu4e)
 
