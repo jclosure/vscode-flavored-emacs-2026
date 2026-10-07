@@ -1310,6 +1310,20 @@ after any command by default unless told not to."
 (add-to-list 'gnus-buttonized-mime-types "multipart/signed")
 (add-to-list 'gnus-buttonized-mime-types "multipart/alternative")
 
+;; Let the active Emacs theme supply HTML mail colors instead of honoring
+;; sender colors (often low-contrast gray/white on a dark background). Bind
+;; for the whole render, including SHR's temporary table-cell buffers: a
+;; buffer-local mode-hook setting alone misses those. Leave EWW unchanged.
+(defvar shr-use-colors) ; special binding even when byte-compiled without mu4e
+(defun my/mu4e-use-theme-colors (render &rest args)
+  "Call RENDER with ARGS, ignoring HTML colors only in mu4e views."
+  (if (derived-mode-p 'mu4e-view-mode)
+      (let ((shr-use-colors nil))
+        (apply render args))
+    (apply render args)))
+(with-eval-after-load 'shr
+  (advice-add 'shr-insert-document :around #'my/mu4e-use-theme-colors))
+
 ;; Color the Gnus/mu4e MIME and multipart/alternative chooser buttons. Keep
 ;; this face-only: no mouse-map changes and no background color, to avoid
 ;; terminal click artifacts.
