@@ -1310,19 +1310,27 @@ after any command by default unless told not to."
 (add-to-list 'gnus-buttonized-mime-types "multipart/signed")
 (add-to-list 'gnus-buttonized-mime-types "multipart/alternative")
 
-;; Let the active Emacs theme supply HTML mail colors instead of honoring
-;; sender colors (often low-contrast gray/white on a dark background). Bind
-;; for the whole render, including SHR's temporary table-cell buffers: a
-;; buffer-local mode-hook setting alone misses those. Leave EWW unchanged.
-(defvar shr-use-colors) ; special binding even when byte-compiled without mu4e
-(defun my/mu4e-use-theme-colors (render &rest args)
-  "Call RENDER with ARGS, ignoring HTML colors only in mu4e views."
+;; Preserve HTML section/heading colors, but ask SHR to correct low contrast.
+;; Defaults are distance 5 / luminance 40; 10 / 60 follows Tassilo Horn's
+;; example: https://yhetil.org/emacs-user/877g3cfnwp.fsf@gnu.org/
+;; Bind for the whole render, including temporary table-cell buffers. EWW
+;; and other SHR consumers retain their own color settings.
+(defvar shr-use-colors)
+(defvar shr-color-visible-distance-min)
+(defvar shr-color-visible-luminance-min)
+(defun my/mu4e-readable-html-colors (render &rest args)
+  "Call RENDER with ARGS, using stronger HTML contrast only in mu4e."
   (if (derived-mode-p 'mu4e-view-mode)
-      (let ((shr-use-colors nil))
+      (let ((shr-use-colors t)
+            (shr-color-visible-distance-min 10)
+            (shr-color-visible-luminance-min 60))
         (apply render args))
     (apply render args)))
 (with-eval-after-load 'shr
-  (advice-add 'shr-insert-document :around #'my/mu4e-use-theme-colors))
+  (require 'shr-color)
+  ;; Also support re-evaluating this block in a running Emacs.
+  (advice-remove 'shr-insert-document #'my/mu4e-use-theme-colors)
+  (advice-add 'shr-insert-document :around #'my/mu4e-readable-html-colors))
 
 ;; Color the Gnus/mu4e MIME and multipart/alternative chooser buttons. Keep
 ;; this face-only: no mouse-map changes and no background color, to avoid
