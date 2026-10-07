@@ -1301,16 +1301,18 @@ after any command by default unless told not to."
 ;; suppressed, not "ask" - so a signed message's signature was never actually
 ;; being checked, no matter what key you pressed; there's no dedicated
 ;; "verify" key in mu4e, it's supposed to just happen automatically on open,
-;; same as decrypt. gnus-buttonized-mime-types needs multipart/signed added
-;; too, or 'always here still won't render the result inline (see the
-;; mm-verify-option docstring).
+;; same as decrypt. Both MIME container types need to be buttonized
+;; explicitly: the Ubuntu/Debian Emacs 29 Gnus build leaves this variable nil,
+;; while the Mac build supplies multipart/alternative by default. Without the
+;; explicit entries, HTML/plain-format chooser buttons disappear on Linux.
 (require 'gnus-art) ; gnus-buttonized-mime-types lives here, not autoloaded
 (setq mm-verify-option 'always)
 (add-to-list 'gnus-buttonized-mime-types "multipart/signed")
+(add-to-list 'gnus-buttonized-mime-types "multipart/alternative")
 
-;; Color the existing Gnus/mu4e MIME buttons without enabling the
-;; multipart/alternative chooser buttons.  Keep this face-only: no mouse-map
-;; changes and no background color, to avoid terminal click artifacts.
+;; Color the Gnus/mu4e MIME and multipart/alternative chooser buttons. Keep
+;; this face-only: no mouse-map changes and no background color, to avoid
+;; terminal click artifacts.
 (defface my/mu4e-mime-button-face
   '((t :foreground "cyan" :weight bold :underline t))
   "Face for mu4e/Gnus MIME and attachment buttons.")
