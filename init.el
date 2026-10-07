@@ -1318,10 +1318,95 @@ after any command by default unless told not to."
 (defvar shr-use-colors)
 (defvar shr-color-visible-distance-min)
 (defvar shr-color-visible-luminance-min)
+(defvar my/mu4e-rendering nil)
+
+(defun my/mu4e-strip-terminal-face-extension (face)
+  "Remove `:extend' from FACE when it is a face property plist."
+  (cond
+   ((and (listp face) (keywordp (car face)))
+    (let ((rest (copy-sequence face)) result)
+      (while rest
+        (let ((key (pop rest))
+              (value (pop rest)))
+          (unless (eq key :extend)
+            (setq result (cons value (cons key result))))))
+      (nreverse result)))
+   ((listp face) (mapcar #'my/mu4e-strip-terminal-face-extension face))
+   (t face)))
+
+(defun my/mu4e-no-terminal-background-extension
+    (add-face start end face &optional append object)
+  "Call ADD-FACE without SHR's line-extending background on a terminal."
+  (funcall add-face start end
+           (if (and my/mu4e-rendering (not (display-graphic-p)))
+               (my/mu4e-strip-terminal-face-extension face)
+             face)
+           append object))
+
+;; HTML mail commonly supplies white, gray, or very pale backgrounds. Keep
+;; those colored regions, but translate them into a small set of muted
+;; Catppuccin-Mocha colors so they fit the dark Emacs frame. Colored sender
+;; backgrounds retain their hue family; neutral backgrounds use surfaces.
+(defcustom my/mu4e-html-background-palette
+  '((neutral-dark . "#181825")
+    (neutral . "#313244")
+    (rose . "#4a303b")
+    (peach . "#4b3b2f")
+    (green . "#304338")
+    (teal . "#2d4144")
+    (blue . "#303a52")
+    (mauve . "#403450")
+    (pink . "#493342"))
+  "Curated dark backgrounds for colored HTML mail regions."
+  :type '(alist :key-type symbol :value-type color))
+
+(defun my/mu4e-html-color-rgb (hex)
+  "Parse HEX into normalized RGB values without relying on frame colors."
+  (let* ((digits (and (string-prefix-p "#" hex) (substring hex 1)))
+         (length (and digits (length digits))))
+    (when (and length (memq length '(3 6 12)))
+      (let* ((width (/ length 3))
+             (maximum (float (1- (expt 16 width)))))
+        (mapcar (lambda (start)
+                  (/ (string-to-number
+                      (substring digits start (+ start width)) 16)
+                     maximum))
+                (list 0 width (* 2 width)))))))
+
+(defun my/mu4e-html-background-color (background)
+  "Map HTML BACKGROUND to a readable, muted mu4e palette color."
+  (let* ((hex (and background (shr-color->hexadecimal background)))
+         (rgb (and hex (my/mu4e-html-color-rgb hex)))
+         (hsl (and rgb (apply #'color-rgb-to-hsl rgb)))
+         (hue (and hsl (nth 0 hsl)))
+         (saturation (and hsl (nth 1 hsl)))
+         (lightness (and hsl (nth 2 hsl))))
+    (cond
+     ((null hsl) background)
+     ((< saturation 0.12)
+      (alist-get (if (< lightness 0.25) 'neutral-dark 'neutral)
+                my/mu4e-html-background-palette))
+     ((or (< hue 0.06) (>= hue 0.94))
+      (alist-get 'rose my/mu4e-html-background-palette))
+     ((< hue 0.16) (alist-get 'peach my/mu4e-html-background-palette))
+     ((< hue 0.43) (alist-get 'green my/mu4e-html-background-palette))
+     ((< hue 0.58) (alist-get 'teal my/mu4e-html-background-palette))
+     ((< hue 0.72) (alist-get 'blue my/mu4e-html-background-palette))
+     ((< hue 0.88) (alist-get 'mauve my/mu4e-html-background-palette))
+     (t (alist-get 'pink my/mu4e-html-background-palette)))))
+
+(defun my/mu4e-palette-color-check (check fg bg)
+  "Call SHR color CHECK with a curated background during mu4e renders."
+  (funcall check fg
+           (if my/mu4e-rendering
+               (my/mu4e-html-background-color bg)
+             bg)))
+
 (defun my/mu4e-readable-html-colors (render &rest args)
   "Call RENDER with ARGS, using stronger HTML contrast only in mu4e."
   (if (derived-mode-p 'mu4e-view-mode)
-      (let ((shr-use-colors t)
+      (let ((my/mu4e-rendering t)
+            (shr-use-colors t)
             (shr-color-visible-distance-min 10)
             (shr-color-visible-luminance-min 60))
         (apply render args))
@@ -1330,7 +1415,273 @@ after any command by default unless told not to."
   (require 'shr-color)
   ;; Also support re-evaluating this block in a running Emacs.
   (advice-remove 'shr-insert-document #'my/mu4e-use-theme-colors)
-  (advice-add 'shr-insert-document :around #'my/mu4e-readable-html-colors))
+  (advice-remove 'shr-color-check #'my/mu4e-palette-color-check)
+  (advice-remove 'add-face-text-property
+                 #'my/mu4e-no-terminal-background-extension)
+  (advice-add 'shr-insert-document :around #'my/mu4e-readable-html-colors)
+  ;; SHR renders table cells in temporary buffers, so the dynamic render flag
+  ;; is more reliable than checking the current buffer's major mode here.
+  (advice-add 'shr-color-check :around #'my/mu4e-palette-color-check)
+  ;; `shr-colorize-region' uses :extend t for backgrounds. In a terminal that
+  ;; paints past the actual mail region and produces colored lines jutting out
+  ;; from the block, so keep backgrounds bounded to the rendered text there.
+  (advice-add 'add-face-text-property :around
+              #'my/mu4e-no-terminal-background-extension))
+
+;; HTML mail panels for terminal Emacs.  shr paints an email's background
+;; colors only under the text it draws, so in a terminal a colored section
+;; shows up as a stack of lines of different lengths, with the indentation
+;; and table padding left uncolored, instead of one solid block.
+;;
+;; After shr renders a mail part, square each colored section off into a
+;; panel: table-cell padding becomes real spaces in the cell's color, every
+;; line gets its section's background from the left edge out to one shared
+;; right edge (the widest line of the part), gaps between runs of one color
+;; take that color, and blank lines between lines of the same color are
+;; filled too.  The email's own layout
+;; (tables, columns, indentation) is left as shr drew it, and text that
+;; already has its own background (buttons, badges) keeps it.  Colors still
+;; come from the palette advice above.
+;;
+;; Also, scoped to mail rendering (mm-shr) so eww keeps its normal look:
+;; - fill to a fixed readable width; mm-shr uses `fill-column' as the width
+;;   when `shr-use-fonts' is nil
+;; - drop aria-hidden junk (e.g. hidden preheader text)
+;; shr has to be loaded first: init.el is lexically bound, so `let' on
+;; a variable that isn't declared yet would bind it lexically and do nothing.
+(require 'shr)
+
+(defvar my/mail-html-max-width 100
+  "Maximum column width for rendered HTML mail.")
+
+(defun my/mail-face-background (face)
+  "Return the background color in FACE (a face plist or list of them)."
+  (cond ((null face) nil)
+        ((and (consp face) (keywordp (car face))) (plist-get face :background))
+        ((consp face) (seq-some #'my/mail-face-background face))))
+
+(defun my/mail-background-at (pos)
+  (my/mail-face-background (get-text-property pos 'face)))
+
+(defun my/mail-line-background (bol eol)
+  "Background covering at least half the visible text between BOL and EOL."
+  (let ((counts nil) (total 0))
+    (dotimes (i (- eol bol))
+      (let ((pos (+ bol i)))
+        (unless (memq (char-after pos) '(?\s ?\t))
+          (setq total (1+ total))
+          (when-let* ((bg (my/mail-background-at pos)))
+            (setf (alist-get bg counts 0 nil #'equal)
+                  (1+ (alist-get bg counts 0 nil #'equal)))))))
+    (when-let* ((best (car (sort counts (lambda (a b) (> (cdr a) (cdr b)))))))
+      (when (>= (* 2 (cdr best)) total)
+        (car best)))))
+
+(defun my/mail-expand-align-spaces (start end)
+  "Turn shr's `:align-to' stretch characters into real spaces.
+shr pads each table cell with one character whose display property
+stretches it to the next column.  Text measurement (and so the panel
+edge) only works on real spaces; the copies keep the cell's face, so
+cells stay colored all the way across."
+  (save-excursion
+    (goto-char start)
+    (let ((end (copy-marker end)))
+      (while (< (point) end)
+        (let ((display (get-text-property (point) 'display)))
+          (if (not (and (eq (car-safe display) 'space)
+                        (plist-get (cdr display) :align-to)))
+              (goto-char (next-single-property-change (point) 'display nil end))
+            (let* ((align (plist-get (cdr display) :align-to))
+                   (column (if (consp align)
+                               (/ (car align) (frame-char-width))
+                             align))
+                   (props (text-properties-at (point)))
+                   (count (max 0 (- column (current-column))))
+                   (spaces (make-string count ?\s)))
+              (delete-char 1)
+              (set-text-properties 0 count props spaces)
+              (remove-text-properties 0 count '(display nil) spaces)
+              (insert spaces)))))
+      (set-marker end nil))))
+
+(defun my/mail-pin-backgrounds (start end)
+  "Keep the email's colors in front of named faces that carry a background.
+Some shr faces inherit `default' (in Emacs 30 `shr-h5' and `shr-h6' are
+just `(:inherit default)'), which brings the theme's background along.
+shr puts the named face first in the face list, so it wins over the
+email's color: every word of an <h5> showed the theme background while
+the spaces between them, which don't get the heading face, showed the
+panel.  Put the email color first again wherever that happens."
+  (let ((pos start))
+    (while (< pos end)
+      (let* ((next (min end (next-single-property-change pos 'face nil end)))
+             (face (get-text-property pos 'face))
+             (bg (my/mail-face-background face)))
+        (when (and bg (consp face) (not (keywordp (car face)))
+                   (seq-some (lambda (f)
+                               (and (symbolp f) (facep f)
+                                    (face-background f nil t)))
+                             face))
+          (add-face-text-property pos next (list :background bg)))
+        (setq pos next)))))
+
+(defun my/mail-whitespace-runs (bol eol)
+  "Return (START . END) for each run of spaces between BOL and EOL."
+  (let ((runs nil) (pos bol))
+    (while (< pos eol)
+      (if (not (eq (char-after pos) ?\s))
+          (setq pos (1+ pos))
+        (let ((run-end pos))
+          (while (and (< run-end eol) (eq (char-after run-end) ?\s))
+            (setq run-end (1+ run-end)))
+          (push (cons pos run-end) runs)
+          (setq pos run-end))))
+    (nreverse runs)))
+
+(defun my/mail-set-background (start end bg)
+  "Make BG the visible background of START..END, keeping other face attributes."
+  (add-face-text-property start end (list :background bg)))
+
+(defun my/mail-paint-line (bol bg width &optional above)
+  "Paint the line at BOL as part of a BG panel that is WIDTH columns wide.
+A blank line copies the backgrounds of the line at ABOVE, when given,
+so margins and cell edges continue straight through it."
+  (goto-char bol)
+  ;; Trailing blanks past the panel edge would stick out once painted.
+  (move-to-column width)
+  (when (and (< (point) (line-end-position))
+             (string-blank-p (buffer-substring (point) (line-end-position))))
+    (delete-region (point) (line-end-position)))
+  (end-of-line)
+  (when (< (current-column) width)
+    (insert (make-string (- width (current-column)) ?\s)))
+  (let ((eol (line-end-position)))
+    (if (string-blank-p (buffer-substring bol eol))
+        (progn
+          (my/mail-set-background bol eol bg)
+          (when above
+            (dotimes (i (- eol bol))
+              (when-let* ((color (my/mail-background-at (+ above i))))
+                (my/mail-set-background (+ bol i) (+ bol i 1) color)))))
+      (dolist (run (my/mail-whitespace-runs bol eol))
+        (let* ((start (car run))
+               (end (cdr run))
+               (left (and (> start bol) (my/mail-background-at (1- start))))
+               (right (and (< end eol) (my/mail-background-at end)))
+               (own (my/mail-background-at start)))
+          (cond
+           ;; Padding to the panel edge continues the last cell's color.
+           ((= end eol) (my/mail-set-background start end (or left bg)))
+           ;; A gap between two stretches of one color is part of them.
+           ((and left (equal left right)) (my/mail-set-background start end left))
+           ;; Any other uncolored gap gets the panel color.
+           ((null own) (my/mail-set-background start end bg)))))
+      ;; Visible text with no background of its own sits on the panel.
+      (let ((pos bol))
+        (while (< pos eol)
+          (let ((next (min eol (next-single-property-change pos 'face nil eol))))
+            (unless (my/mail-background-at pos)
+              (add-face-text-property pos next (list :background bg) t))
+            (setq pos next)))))))
+
+(defun my/mail-paint-panels (start end)
+  "Square off the background-colored sections between START and END."
+  (my/mail-expand-align-spaces start end)
+  (my/mail-pin-backgrounds start end)
+  (save-excursion
+    (let ((lines nil) (width 0))
+      (goto-char start)
+      (while (and (< (point) end) (not (eobp)))
+        (let* ((bol (point))
+               (eol (line-end-position))
+               (blank (string-blank-p (buffer-substring bol eol))))
+          (unless blank
+            (end-of-line)
+            (skip-chars-backward " \t" bol)
+            (setq width (max width (current-column))))
+          (push (vector (copy-marker bol)
+                        (unless blank (my/mail-line-background bol eol))
+                        blank)
+                lines)
+          (goto-char eol)
+          (forward-line 1)))
+      (setq lines (vconcat (nreverse lines)))
+      ;; A blank line belongs to a panel when the nearest non-blank lines
+      ;; above and below it are both in that panel.
+      (dotimes (i (length lines))
+        (when (aref (aref lines i) 2)
+          (let ((above (seq-find (lambda (l) (not (aref l 2)))
+                                 (reverse (seq-subseq lines 0 i))))
+                (below (seq-find (lambda (l) (not (aref l 2)))
+                                 (seq-subseq lines (1+ i)))))
+            (when (and above below (aref above 1)
+                       (equal (aref above 1) (aref below 1)))
+              (aset (aref lines i) 1 (aref above 1))))))
+      (dotimes (i (length lines))
+        (let* ((line (aref lines i))
+               (bol (marker-position (aref line 0)))
+               (prev (and (> i 0) (aref lines (1- i)))))
+          (cond ((aref line 1)
+                 (my/mail-paint-line
+                  bol (aref line 1) width
+                  ;; The line above, when it is in the same panel.
+                  (and prev (equal (aref prev 1) (aref line 1))
+                       (marker-position (aref prev 0)))))
+                ;; A blank line outside any panel is a gap between panels;
+                ;; empty it so leftover colored spaces don't show as a stub.
+                ((aref line 2)
+                 (goto-char bol)
+                 (delete-region bol (line-end-position))))))
+      (seq-doseq (line lines)
+        (set-marker (aref line 0) nil)))))
+
+(defvar my/mail-html-rendering nil
+  "Non-nil while `mm-shr' renders a mail part.")
+
+(defun my/mail-skip-table-extra-strings (orig &rest args)
+  "Around advice for `shr-collect-extra-strings-in-table'.
+After each top-level table shr re-inserts the table's images, because GUI
+Emacs can't place images inside table cells.  A terminal already shows the
+image's alt text inside its cell, so in terminal mail the copy is noise."
+  (unless (and my/mail-html-rendering (not (display-graphic-p)))
+    (apply orig args)))
+
+(defun my/mm-shr-clean-layout (orig &rest args)
+  "Around advice for `mm-shr': readable width and solid color panels."
+  (let* ((window (or (get-buffer-window (current-buffer)) (selected-window)))
+         (fill-column (max 40 (min my/mail-html-max-width
+                                   (- (window-width window) 2))))
+         (shr-use-fonts nil)
+         (shr-discard-aria-hidden t)
+         (shr-bullet "• ")
+         (shr-hr-line ?─)
+         (my/mail-html-rendering t)
+         (start (point-marker))
+         (end (copy-marker (point) t)))
+    (prog1 (apply orig args)
+      (my/mail-paint-panels start end)
+      (set-marker start nil)
+      (set-marker end nil))))
+
+;; Keep the palette backgrounds dark.  When text and background are too
+;; close, `shr-color-visible' moves both their lightness apart unless told
+;; the background is fixed.  Dark email text (#333) on a palette panel
+;; (#313244) needs the 60-point lightness gap set above, so shr lifted the
+;; panel to a light gray and kept the text dark, and the theme's light-blue
+;; `shr-link' color, which shr never checks, ended up unreadable on it.  In
+;; mail, keep the background and adjust only the text.
+(defun my/mail-keep-background-contrast (orig bg fg &optional fixed-background)
+  "Around advice for `shr-color-visible': in mail, only adjust the text color."
+  (funcall orig bg fg (or fixed-background my/mu4e-rendering)))
+
+;; Remove the earlier layout-table flattening if this block is re-evaluated
+;; in a running Emacs that still has it.
+(when (fboundp 'my/shr-flatten-layout-table)
+  (advice-remove 'shr-tag-table #'my/shr-flatten-layout-table))
+(advice-add 'shr-color-visible :around #'my/mail-keep-background-contrast)
+(advice-add 'shr-collect-extra-strings-in-table :around
+            #'my/mail-skip-table-extra-strings)
+(advice-add 'mm-shr :around #'my/mm-shr-clean-layout)
 
 ;; Color the Gnus/mu4e MIME and multipart/alternative chooser buttons. Keep
 ;; this face-only: no mouse-map changes and no background color, to avoid
