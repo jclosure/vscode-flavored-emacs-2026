@@ -1617,13 +1617,16 @@ sides takes that color; wider runs are real gutters and stay."
             ;; Later runs compare against this one's new color.
             (setf (nth 2 (aref runs i)) left)))))))
 
-(defun my/mail-paint-gap (bol above below width)
+(defun my/mail-paint-gap (bol above below width &optional page)
   "Fill the blank line at BOL between the lines at ABOVE and BELOW.
 Each column takes the color the two lines share there.  Where they differ
 (a button row under a section, or two sibling sections), the column
 continues the last shared color to its left, which is the panel enclosing
-both.  Columns with nothing shared stay unpainted.  Without both
-neighbors, empty the line so leftover colored spaces don't show as a stub."
+both; before the first shared column, it takes the first shared color to
+its right.  When the lines share no color at all (two differently colored
+rows, e.g. chat bubbles), the line takes PAGE, the email's page color.
+Without both neighbors, empty the line so leftover colored spaces don't
+show as a stub."
   ;; Read the colors before touching the buffer: inserting into this line
   ;; shifts BELOW.
   (let ((colors
@@ -1632,14 +1635,18 @@ neighbors, empty the line so leftover colored spaces don't show as a stub."
                                                (line-end-position)))
                     (below-end (save-excursion (goto-char below)
                                                (line-end-position)))
-                    (outer nil) (colors nil))
+                    (shared nil) (outer nil) (colors nil))
                 (dotimes (i width)
                   (let ((up (and (< (+ above i) above-end)
                                  (my/mail-background-at (+ above i))))
                         (down (and (< (+ below i) below-end)
                                    (my/mail-background-at (+ below i)))))
-                    (when (equal up down) (setq outer up))
-                    (push outer colors)))
+                    (push (and (equal up down) up) shared)))
+                (setq shared (nreverse shared))
+                (setq outer (or (seq-find #'identity shared) page))
+                (dolist (color shared)
+                  (when color (setq outer color))
+                  (push outer colors))
                 (nreverse colors)))))
     (goto-char bol)
     (delete-region bol (line-end-position))
@@ -1654,12 +1661,21 @@ neighbors, empty the line so leftover colored spaces don't show as a stub."
         (backward-char 1))
       (delete-region (point) (line-end-position)))))
 
+(defun my/mail-page-color (lines)
+  "The most common panel color among LINES: the email's page background."
+  (let ((counts nil))
+    (seq-doseq (line lines)
+      (when-let* ((bg (aref line 1)))
+        (setf (alist-get bg counts 0 nil #'equal)
+              (1+ (alist-get bg counts 0 nil #'equal)))))
+    (car (car (sort counts (lambda (a b) (> (cdr a) (cdr b))))))))
+
 (defun my/mail-paint-panels (start end)
   "Square off the background-colored sections between START and END."
   (my/mail-expand-align-spaces start end)
   (my/mail-pin-backgrounds start end)
   (save-excursion
-    (let ((lines nil) (width 0) (gaps nil))
+    (let ((lines nil) (width 0) (gaps nil) (page nil))
       (goto-char start)
       (while (and (< (point) end) (not (eobp)))
         (let* ((bol (point))
@@ -1704,6 +1720,7 @@ neighbors, empty the line so leftover colored spaces don't show as a stub."
       ;; background as a dark stripe across the wrapper.  Fill it from the
       ;; painted lines around it instead; this runs after the loop above so
       ;; the line below is already painted.
+      (setq page (my/mail-page-color lines))
       (dolist (i gaps)
         (let ((above (seq-find (lambda (l) (not (aref l 2)))
                                (reverse (seq-subseq lines 0 i))))
@@ -1712,7 +1729,7 @@ neighbors, empty the line so leftover colored spaces don't show as a stub."
           (my/mail-paint-gap (marker-position (aref (aref lines i) 0))
                              (and above (marker-position (aref above 0)))
                              (and below (marker-position (aref below 0)))
-                             width)))
+                             width page)))
       (my/mail-align-panel-left-edges lines)
       (seq-doseq (line lines)
         (set-marker (aref line 0) nil)))))
