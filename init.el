@@ -1582,7 +1582,40 @@ so margins and cell edges continue straight through it."
           (let ((next (min eol (next-single-property-change pos 'face nil eol))))
             (unless (my/mail-background-at pos)
               (add-face-text-property pos next (list :background bg) t))
-            (setq pos next)))))))
+            (setq pos next))))
+      (my/mail-close-slivers bol eol))))
+
+(defvar my/mail-sliver-max-width 2
+  "Widest blank run `my/mail-close-slivers' treats as a nesting artifact.")
+
+(defun my/mail-close-slivers (bol eol)
+  "Give thin blank stripes between BOL and EOL the color around them.
+Marketing mail nests full-width wrapper tables (often #fff) around
+fixed-width colored sections.  A browser puts those sections flush, but
+shr indents each nested table by a column or two, which exposes the
+wrapper as thin vertical stripes through the section.  A blank run at
+most `my/mail-sliver-max-width' columns wide with the same color on both
+sides takes that color; wider runs are real gutters and stay."
+  (let ((runs nil) (pos bol))
+    ;; Split the line into runs of one background color.
+    (while (< pos eol)
+      (let ((color (my/mail-background-at pos)) (end (1+ pos)))
+        (while (and (< end eol) (equal (my/mail-background-at end) color))
+          (setq end (1+ end)))
+        (push (list pos end color) runs)
+        (setq pos end)))
+    (setq runs (vconcat (nreverse runs)))
+    (dotimes (i (length runs))
+      (when (and (> i 0) (< (1+ i) (length runs)))
+        (pcase-let ((`(,start ,end ,_) (aref runs i))
+                    (`(,_ ,_ ,left) (aref runs (1- i)))
+                    (`(,_ ,_ ,right) (aref runs (1+ i))))
+          (when (and left (equal left right)
+                     (<= (- end start) my/mail-sliver-max-width)
+                     (string-blank-p (buffer-substring start end)))
+            (my/mail-set-background start end left)
+            ;; Later runs compare against this one's new color.
+            (setf (nth 2 (aref runs i)) left)))))))
 
 (defun my/mail-paint-gap (bol above below width)
   "Fill the blank line at BOL between the lines at ABOVE and BELOW.
@@ -1680,8 +1713,47 @@ neighbors, empty the line so leftover colored spaces don't show as a stub."
                              (and above (marker-position (aref above 0)))
                              (and below (marker-position (aref below 0)))
                              width)))
+      (my/mail-align-panel-left-edges lines)
       (seq-doseq (line lines)
         (set-marker (aref line 0) nil)))))
+
+(defvar my/mail-ragged-edge-max 3
+  "Most columns `my/mail-align-panel-left-edges' extends a panel line by.")
+
+(defun my/mail-panel-start (bol bg)
+  "Column of the first BG-colored character on the line at BOL, or nil."
+  (save-excursion
+    (goto-char bol)
+    (let ((eol (line-end-position)))
+      (while (and (< (point) eol) (not (equal (my/mail-background-at (point)) bg)))
+        (forward-char 1))
+      (and (< (point) eol) (- (point) bol)))))
+
+(defun my/mail-align-panel-left-edges (lines)
+  "Even out the left edge of each panel in LINES.
+shr indents nested tables by a column or two, and not every row of a
+section is nested equally deep, so a panel's color can start a few
+columns later on some lines (a notch at its top-left corner).  Within a
+run of lines in one panel, fill blank columns back to the panel's
+leftmost start, up to `my/mail-ragged-edge-max' columns."
+  (let ((i 0) (n (length lines)))
+    (while (< i n)
+      (let ((bg (aref (aref lines i) 1)) (j i))
+        (while (and (< j n) bg (equal (aref (aref lines j) 1) bg))
+          (setq j (1+ j)))
+        (if (= j i)
+            (setq i (1+ i))
+          (let* ((bols (mapcar (lambda (k) (marker-position (aref (aref lines k) 0)))
+                               (number-sequence i (1- j))))
+                 (starts (mapcar (lambda (bol) (my/mail-panel-start bol bg)) bols))
+                 (edge (apply #'min (or (delq nil (copy-sequence starts)) '(0)))))
+            (cl-mapc
+             (lambda (bol start)
+               (when (and start (< edge start (+ edge my/mail-ragged-edge-max 1))
+                          (string-blank-p (buffer-substring (+ bol edge) (+ bol start))))
+                 (my/mail-set-background (+ bol edge) (+ bol start) bg)))
+             bols starts))
+          (setq i j))))))
 
 (defvar my/mail-html-rendering nil
   "Non-nil while `mm-shr' renders a mail part.")
@@ -1693,6 +1765,43 @@ Emacs can't place images inside table cells.  A terminal already shows the
 image's alt text inside its cell, so in terminal mail the copy is noise."
   (unless (and my/mail-html-rendering (not (display-graphic-p)))
     (apply orig args)))
+
+(defun my/mail-text-style-warnings (start end)
+  "Drop the emoji selector from shr's suspicious-link warning.
+shr inserts \"⚠\" plus U+FE0F after a link whose text names a different
+host than its target.  Emacs counts that as one column, but terminals
+draw the emoji form two columns wide, so the line sticks out past its
+panel.  The plain ⚠ is one column everywhere; its help-echo stays."
+  (save-excursion
+    (goto-char start)
+    (while (search-forward "⚠️" end t)
+      (delete-region (1- (point)) (point)))))
+
+(defun my/mu4e-make-room-for-url-numbers ()
+  "After `mu4e--view-activate-urls', keep panel lines at their width.
+mu4e shows a link number such as [1] after each URL in the visible text,
+as an overlay string added after shr laid out the mail.  Take that many
+trailing padding spaces off the line so its panel keeps one right edge.
+Also drop the zero-width space mu4e puts in front of the number: a
+terminal draws it as a full column."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (dolist (ov (overlays-in (point-min) (point-max)))
+        (when-let* (((overlay-get ov 'mu4e-overlay))
+                    (after (overlay-get ov 'after-string)))
+          (setq after (string-replace "​" "" after))
+          (overlay-put ov 'after-string after)
+          (goto-char (overlay-end ov))
+          (let* ((eol (line-end-position))
+                 (padding (save-excursion
+                            (goto-char eol)
+                            (skip-chars-backward " " (overlay-end ov))
+                            (point)))
+                 (room (min (string-width after) (- eol padding))))
+            (delete-region (- eol room) eol)))))))
+
+(advice-add 'mu4e--view-activate-urls :after
+            #'my/mu4e-make-room-for-url-numbers)
 
 (defun my/mm-shr-clean-layout (orig &rest args)
   "Around advice for `mm-shr': readable width and solid color panels."
@@ -1707,6 +1816,7 @@ image's alt text inside its cell, so in terminal mail the copy is noise."
          (start (point-marker))
          (end (copy-marker (point) t)))
     (prog1 (apply orig args)
+      (my/mail-text-style-warnings start end)
       (my/mail-paint-panels start end)
       (set-marker start nil)
       (set-marker end nil))))
