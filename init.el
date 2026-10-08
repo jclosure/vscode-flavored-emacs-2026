@@ -1775,13 +1775,33 @@ leftmost start, up to `my/mail-ragged-edge-max' columns."
 (defvar my/mail-html-rendering nil
   "Non-nil while `mm-shr' renders a mail part.")
 
+(defvar my/mail-skip-extra-images nil
+  "Non-nil while shr re-inserts a table's images in terminal mail.")
+
 (defun my/mail-skip-table-extra-strings (orig &rest args)
   "Around advice for `shr-collect-extra-strings-in-table'.
 After each top-level table shr re-inserts the table's images, because GUI
 Emacs can't place images inside table cells.  A terminal already shows the
-image's alt text inside its cell, so in terminal mail the copy is noise."
-  (unless (and my/mail-html-rendering (not (display-graphic-p)))
+image's alt text inside its cell, so in terminal mail the copy is noise.
+
+Only the images are skipped.  The same pass also renders content that sits
+outside any <td> (stray strings, and tables placed directly in a <tr>,
+which is how Reddit digests hold every post); skipping the whole pass
+dropped all of that."
+  (let ((my/mail-skip-extra-images
+         (and my/mail-html-rendering (not (display-graphic-p)))))
     (apply orig args)))
+
+(defun my/mail-skip-extra-image (orig tag-name dom &rest args)
+  "Around advice for `shr-indirect-call': see `my/mail-skip-table-extra-strings'."
+  (cond
+   ((and my/mail-skip-extra-images (memq tag-name '(img object))) nil)
+   ;; A table rendered from that pass is real content: render it normally,
+   ;; images included.
+   ((eq tag-name 'table)
+    (let ((my/mail-skip-extra-images nil))
+      (apply orig tag-name dom args)))
+   (t (apply orig tag-name dom args))))
 
 (defun my/mail-text-style-warnings (start end)
   "Drop the emoji selector from shr's suspicious-link warning.
@@ -1856,6 +1876,7 @@ terminal draws it as a full column."
 (advice-add 'shr-color-visible :around #'my/mail-keep-background-contrast)
 (advice-add 'shr-collect-extra-strings-in-table :around
             #'my/mail-skip-table-extra-strings)
+(advice-add 'shr-indirect-call :around #'my/mail-skip-extra-image)
 (advice-add 'mm-shr :around #'my/mm-shr-clean-layout)
 
 ;; Color the Gnus/mu4e MIME and multipart/alternative chooser buttons. Keep
