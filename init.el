@@ -1584,12 +1584,49 @@ so margins and cell edges continue straight through it."
               (add-face-text-property pos next (list :background bg) t))
             (setq pos next)))))))
 
+(defun my/mail-paint-gap (bol above below width)
+  "Fill the blank line at BOL between the lines at ABOVE and BELOW.
+Each column takes the color the two lines share there.  Where they differ
+(a button row under a section, or two sibling sections), the column
+continues the last shared color to its left, which is the panel enclosing
+both.  Columns with nothing shared stay unpainted.  Without both
+neighbors, empty the line so leftover colored spaces don't show as a stub."
+  ;; Read the colors before touching the buffer: inserting into this line
+  ;; shifts BELOW.
+  (let ((colors
+         (and above below
+              (let ((above-end (save-excursion (goto-char above)
+                                               (line-end-position)))
+                    (below-end (save-excursion (goto-char below)
+                                               (line-end-position)))
+                    (outer nil) (colors nil))
+                (dotimes (i width)
+                  (let ((up (and (< (+ above i) above-end)
+                                 (my/mail-background-at (+ above i))))
+                        (down (and (< (+ below i) below-end)
+                                   (my/mail-background-at (+ below i)))))
+                    (when (equal up down) (setq outer up))
+                    (push outer colors)))
+                (nreverse colors)))))
+    (goto-char bol)
+    (delete-region bol (line-end-position))
+    (when colors
+      (insert (make-string width ?\s))
+      (seq-do-indexed (lambda (color i)
+                        (when color
+                          (my/mail-set-background (+ bol i) (+ bol i 1) color)))
+                      colors)
+      ;; Unpainted trailing columns would just be stray spaces.
+      (while (and (> (point) bol) (not (my/mail-background-at (1- (point)))))
+        (backward-char 1))
+      (delete-region (point) (line-end-position)))))
+
 (defun my/mail-paint-panels (start end)
   "Square off the background-colored sections between START and END."
   (my/mail-expand-align-spaces start end)
   (my/mail-pin-backgrounds start end)
   (save-excursion
-    (let ((lines nil) (width 0))
+    (let ((lines nil) (width 0) (gaps nil))
       (goto-char start)
       (while (and (< (point) end) (not (eobp)))
         (let* ((bol (point))
@@ -1627,11 +1664,22 @@ so margins and cell edges continue straight through it."
                   ;; The line above, when it is in the same panel.
                   (and prev (equal (aref prev 1) (aref line 1))
                        (marker-position (aref prev 0)))))
-                ;; A blank line outside any panel is a gap between panels;
-                ;; empty it so leftover colored spaces don't show as a stub.
-                ((aref line 2)
-                 (goto-char bol)
-                 (delete-region bol (line-end-position))))))
+                ((aref line 2) (push i gaps)))))
+      ;; A blank line outside any panel is a gap between two differently
+      ;; colored panels.  Both usually sit inside an outer wrapper (the
+      ;; email's page background), so emptying the gap showed the theme
+      ;; background as a dark stripe across the wrapper.  Fill it from the
+      ;; painted lines around it instead; this runs after the loop above so
+      ;; the line below is already painted.
+      (dolist (i gaps)
+        (let ((above (seq-find (lambda (l) (not (aref l 2)))
+                               (reverse (seq-subseq lines 0 i))))
+              (below (seq-find (lambda (l) (not (aref l 2)))
+                               (seq-subseq lines (1+ i)))))
+          (my/mail-paint-gap (marker-position (aref (aref lines i) 0))
+                             (and above (marker-position (aref above 0)))
+                             (and below (marker-position (aref below 0)))
+                             width)))
       (seq-doseq (line lines)
         (set-marker (aref line 0) nil)))))
 
