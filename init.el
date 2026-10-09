@@ -94,7 +94,7 @@
    require-final-newline t
    kill-do-not-save-duplicates t
    ;; Scrolling that feels native
-   scroll-margin 3
+   scroll-margin 0
    scroll-conservatively 101
    scroll-preserve-screen-position t
    mouse-wheel-scroll-amount '(2 ((shift) . 1))
