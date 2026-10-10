@@ -1803,6 +1803,52 @@ dropped all of that."
       (apply orig tag-name dom args)))
    (t (apply orig tag-name dom args))))
 
+(defun my/mail-image-size (dom attr)
+  "Pixel size ATTR (width or height) of the <img> DOM, or nil."
+  (let ((value (or (dom-attr dom attr)
+                   (let ((style (dom-attr dom 'style)))
+                     (and style
+                          ;; Not max-width or line-height.
+                          (string-match (format "\\(?:\\`\\|[;{ \t\n]\\)%s[ \t\n]*:[ \t\n]*\\([0-9]+\\)"
+                                                attr)
+                                        style)
+                          (match-string 1 style))))))
+    (and value (string-match "\\`[ \t]*\\([0-9]+\\)" value)
+         (string-to-number (match-string 1 value)))))
+
+(defun my/mail-terminal-image (orig dom &rest args)
+  "Around advice for `shr-tag-img' in terminal mail.
+A terminal shows an image as its alt text, and shr shows an image without
+one as a bare \"*\": a pin grid or product feed turns into columns of
+stars.  Show \"[image]\" instead, so it reads as an image (a linked one
+stays a link).  Tracking pixels (1-2 px), which a browser doesn't show
+either, render as nothing."
+  (if (not (and my/mail-html-rendering (not (display-graphic-p))))
+      (apply orig dom args)
+    (let ((width (my/mail-image-size dom 'width))
+          (height (my/mail-image-size dom 'height)))
+      (unless (and width height (<= width 2) (<= height 2))
+        (when (string-blank-p (or (dom-attr dom 'alt) ""))
+          (dom-set-attribute dom 'alt "[image]"))
+        (apply orig dom args)))))
+
+(defun my/mail-collapse-blank-lines (start end)
+  "Collapse runs of blank lines between START and END to one.
+Fixed-height spacer cells and image rows become several empty lines each
+in a terminal, which spreads an image-heavy mail over pages of nothing.
+Only whitespace-only lines go."
+  (save-excursion
+    (goto-char start)
+    (let ((end (copy-marker end)) (blank-before nil))
+      (while (< (point) end)
+        (let ((blank (string-blank-p
+                      (buffer-substring (point) (line-end-position)))))
+          (if (and blank blank-before)
+              (delete-region (point) (min end (1+ (line-end-position))))
+            (setq blank-before blank)
+            (forward-line 1))))
+      (set-marker end nil))))
+
 (defun my/mail-text-style-warnings (start end)
   "Drop the emoji selector from shr's suspicious-link warning.
 shr inserts \"⚠\" plus U+FE0F after a link whose text names a different
@@ -1853,6 +1899,7 @@ terminal draws it as a full column."
          (start (point-marker))
          (end (copy-marker (point) t)))
     (prog1 (apply orig args)
+      (my/mail-collapse-blank-lines start end)
       (my/mail-text-style-warnings start end)
       (my/mail-paint-panels start end)
       (set-marker start nil)
@@ -1877,6 +1924,7 @@ terminal draws it as a full column."
 (advice-add 'shr-collect-extra-strings-in-table :around
             #'my/mail-skip-table-extra-strings)
 (advice-add 'shr-indirect-call :around #'my/mail-skip-extra-image)
+(advice-add 'shr-tag-img :around #'my/mail-terminal-image)
 (advice-add 'mm-shr :around #'my/mm-shr-clean-layout)
 
 ;; Color the Gnus/mu4e MIME and multipart/alternative chooser buttons. Keep
