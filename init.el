@@ -2059,18 +2059,16 @@ shr-rendered links in a terminal session."
 ;; Mail in Spam is never unsubscribed, since that tells a spammer the address
 ;; is live; M-u there goes straight to trashing it.
 ;;
-;; The trash search skips [Gmail]/All Mail: mbsync no longer syncs it, so its
-;; copies are stale, and trashing one would upload a duplicate to Trash while
-;; the real message stayed put.  Moving a synced copy (Inbox, a label folder)
-;; to [Gmail]/Trash is what trashes the message in Gmail.
+;; Gmail keeps one message under several labels, and mbsync syncs each
+;; label folder (Inbox, Important, [Gmail]/All Mail, ...) as its own copy.
+;; The trash search lists every copy (duplicates on) so all of them move to
+;; [Gmail]/Trash, archived ones in All Mail included; Gmail folds the copies
+;; back into one message in its Trash.
 
 (require 'url-util)
 
 (defvar my/mu4e-spam-folder "/[Gmail]/Spam"
   "Maildir Gmail's spam label syncs to.")
-
-(defvar my/mu4e-unsynced-maildirs '("/[Gmail]/All Mail")
-  "Maildirs mbsync no longer syncs; their copies are stale.")
 
 (defun my/mu4e-unsubscribe-headers (path)
   "Return (LIST-UNSUBSCRIBE . LIST-UNSUBSCRIBE-POST) from the message at PATH.
@@ -2139,17 +2137,17 @@ offer to execute the marks."
     (if (plistp from) (plist-get from :email) (cdr from))))
 
 (defun my/mu4e-sender-query (address &rest exclude)
-  "mu query for mail from ADDRESS outside the unsynced maildirs and EXCLUDE."
+  "mu query for mail from ADDRESS outside the maildirs in EXCLUDE."
   (mapconcat #'identity
              (cons (format "from:%s" address)
                    (mapcar (lambda (dir) (format "NOT maildir:\"%s\"" dir))
-                           (append exclude my/mu4e-unsynced-maildirs)))
+                           exclude))
              " AND "))
 
 (defun my/mu4e-trash-all-from (address)
-  "List every synced message from ADDRESS, marked for trash.
-Duplicates and related thread messages are shown, so every copy (Inbox and
-label folders) is trashed and nothing from anyone else is."
+  "List every copy of mail from ADDRESS outside Trash, marked for trash.
+Duplicates are shown and related thread messages aren't, so every copy
+(Inbox, label folders, All Mail) is trashed and nothing from anyone else is."
   (add-hook 'mu4e-headers-found-hook #'my/mu4e-mark-found-for-trash)
   (let ((mu4e-search-skip-duplicates nil)
         (mu4e-search-include-related nil)
@@ -2158,9 +2156,9 @@ label folders) is trashed and nothing from anyone else is."
 
 (defun my/mu4e-search-sender ()
   "Show all mail from the sender of the message at point (M-s).
-Leaves out the unsynced [Gmail]/All Mail copies, so marks set in the result
-(trash, move) act on synced copies, and related thread messages from other
-people.  \\ (`mu4e-search-prev') goes back to the previous search."
+Archived mail (only in [Gmail]/All Mail), Trash and Spam are included;
+each message shows once, and related thread messages from other people are
+left out.  \\ (`mu4e-search-prev') goes back to the previous search."
   (interactive)
   (let* ((msg (or (mu4e-message-at-point t) (user-error "No message here")))
          (address (or (my/mu4e-sender-address msg)
