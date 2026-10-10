@@ -1977,6 +1977,150 @@ shr-rendered links in a terminal session."
   (define-key mu4e-view-mode-map [mouse-1] #'my/shr-browse-url-mouse)
   (define-key mu4e-view-mode-map [C-mouse-1] #'my/shr-browse-url-mouse))
 
+;;; --- Unsubscribe and trash all (List-Unsubscribe, RFC 2369/8058) -----------
+;; M-u in the headers list or a message: unsubscribe from the sender's list,
+;; then search every synced copy of mail from that sender, mark it all for
+;; trash, and finish with mu4e's own "execute N marks?" prompt, so the list is
+;; on screen before anything moves.  C-u M-u unsubscribes only.  (U stays
+;; mu4e's unmark-all.)
+;;
+;; How it unsubscribes, best first:
+;; - one-click (List-Unsubscribe-Post: List-Unsubscribe=One-Click): POST from
+;;   this machine with curl, the same request Gmail's button sends
+;; - mailto: send the requested unsubscribe mail through smtpmail
+;; - a web link only: open it in the browser (forwarded to the client)
+;; Mail in Spam is never unsubscribed, since that tells a spammer the address
+;; is live; M-u there goes straight to trashing it.
+;;
+;; The trash search skips [Gmail]/All Mail: mbsync no longer syncs it, so its
+;; copies are stale, and trashing one would upload a duplicate to Trash while
+;; the real message stayed put.  Moving a synced copy (Inbox, a label folder)
+;; to [Gmail]/Trash is what trashes the message in Gmail.
+
+(require 'url-util)
+
+(defvar my/mu4e-spam-folder "/[Gmail]/Spam"
+  "Maildir Gmail's spam label syncs to.")
+
+(defvar my/mu4e-unsynced-maildirs '("/[Gmail]/All Mail")
+  "Maildirs mbsync no longer syncs; their copies are stale.")
+
+(defun my/mu4e-unsubscribe-headers (path)
+  "Return (LIST-UNSUBSCRIBE . LIST-UNSUBSCRIBE-POST) from the message at PATH.
+mu doesn't index these headers, so read them from the file."
+  (with-temp-buffer
+    (insert-file-contents path nil 0 262144)
+    (mail-narrow-to-head)
+    (cons (mail-fetch-field "List-Unsubscribe")
+          (mail-fetch-field "List-Unsubscribe-Post"))))
+
+(defun my/mu4e-unsubscribe-method (unsubscribe post)
+  "Choose how to act on List-Unsubscribe value UNSUBSCRIBE and POST.
+Return (one-click . URL), (mailto . URI), (browse . URL), or nil."
+  (let ((uris nil) (start 0))
+    (while (and unsubscribe (string-match "<\\([^>]+\\)>" unsubscribe start))
+      (push (replace-regexp-in-string "[ \t\r\n]" "" (match-string 1 unsubscribe))
+            uris)
+      (setq start (match-end 0)))
+    (setq uris (nreverse uris))
+    (let ((https (seq-find (lambda (u) (string-prefix-p "https://" u t)) uris))
+          (web (seq-find (lambda (u) (string-match-p "\\`https?://" u)) uris))
+          (mailto (seq-find (lambda (u) (string-prefix-p "mailto:" u t)) uris)))
+      (cond
+       ((and https post (string-match-p "List-Unsubscribe=One-Click" post))
+        (cons 'one-click https))
+       (mailto (cons 'mailto mailto))
+       (web (cons 'browse web))))))
+
+(defun my/mu4e-unsubscribe-one-click (url)
+  "POST an RFC 8058 one-click unsubscribe to URL; return the HTTP status."
+  (with-temp-buffer
+    (let ((exit (call-process "curl" nil t nil "-sS" "--max-time" "30"
+                              "-o" null-device "-w" "%{http_code}"
+                              "-X" "POST" "--data" "List-Unsubscribe=One-Click"
+                              url)))
+      (unless (eq exit 0)
+        (user-error "Unsubscribe request failed: %s" (string-trim (buffer-string))))
+      (string-to-number (buffer-string)))))
+
+(defun my/mu4e-unsubscribe-mailto (uri)
+  "Send the unsubscribe mail that mailto URI asks for."
+  (let* ((parts (split-string (substring uri (length "mailto:")) "?"))
+         (query (and (cadr parts) (url-parse-query-string (cadr parts))))
+         (to (url-unhex-string (car parts)))
+         (subject (or (cadr (assoc-string "subject" query t)) "unsubscribe"))
+         (body (or (cadr (assoc-string "body" query t)) "unsubscribe")))
+    (let ((mail-user-agent 'message-user-agent))
+      (compose-mail to subject))
+    (message-goto-body)
+    (insert body)
+    (let ((message-kill-buffer-on-exit t))
+      (message-send-and-exit))
+    to))
+
+(defun my/mu4e-mark-found-for-trash ()
+  "One-shot `mu4e-headers-found-hook': mark all results for trash, then
+offer to execute the marks."
+  (remove-hook 'mu4e-headers-found-hook #'my/mu4e-mark-found-for-trash)
+  (with-current-buffer (mu4e-get-headers-buffer)
+    (mu4e-headers-mark-for-each-if (cons 'trash nil) (lambda (_msg _param) t))
+    (mu4e-mark-execute-all)))
+
+(defun my/mu4e-trash-all-from (address)
+  "List every synced message from ADDRESS, marked for trash.
+Duplicates and related thread messages are shown, so every copy (Inbox and
+label folders) is trashed and nothing from anyone else is."
+  (add-hook 'mu4e-headers-found-hook #'my/mu4e-mark-found-for-trash)
+  (let ((mu4e-search-skip-duplicates nil)
+        (mu4e-search-include-related nil)
+        (mu4e-search-full t))
+    (mu4e-search
+     (mapconcat #'identity
+                (cons (format "from:%s" address)
+                      (mapcar (lambda (dir) (format "NOT maildir:\"%s\"" dir))
+                              (cons mu4e-trash-folder my/mu4e-unsynced-maildirs)))
+                " AND "))))
+
+(defun my/mu4e-unsubscribe (&optional keep-mail)
+  "Unsubscribe from the list of the message at point, then trash its mail.
+With prefix argument KEEP-MAIL, only unsubscribe."
+  (interactive "P")
+  (let* ((msg (or (mu4e-message-at-point t) (user-error "No message here")))
+         (from (car (mu4e-message-field msg :from)))
+         (address (if (plistp from) (plist-get from :email) (cdr from)))
+         (spam (equal (mu4e-message-field msg :maildir) my/mu4e-spam-folder))
+         (headers (my/mu4e-unsubscribe-headers (mu4e-message-field msg :path)))
+         (method (my/mu4e-unsubscribe-method (car headers) (cdr headers))))
+    (cond
+     (spam (message "In Spam: not unsubscribing (it would confirm your address)"))
+     ((null method) (message "No List-Unsubscribe header from %s" address))
+     ((not (y-or-n-p
+            (format "Unsubscribe from %s %s? " address
+                    (pcase (car method)
+                      ('one-click "now (one-click)")
+                      ('mailto (format "by mailing %s" (cdr method)))
+                      ('browse "in the browser")))))
+      (user-error "Cancelled"))
+     (t
+      (pcase (car method)
+        ('one-click
+         (let ((status (my/mu4e-unsubscribe-one-click (cdr method))))
+           (if (< 0 status 400)
+               (message "Unsubscribed from %s (HTTP %d)" address status)
+             (user-error "Unsubscribe from %s failed: HTTP %d" address status))))
+        ('mailto
+         (message "Sent unsubscribe mail to %s"
+                  (my/mu4e-unsubscribe-mailto (cdr method))))
+        ('browse
+         (browse-url (cdr method))
+         (message "Opened the unsubscribe page for %s" address)))))
+    (unless (or keep-mail (null address))
+      (my/mu4e-trash-all-from address))))
+
+(with-eval-after-load 'mu4e
+  (define-key mu4e-headers-mode-map (kbd "M-u") #'my/mu4e-unsubscribe)
+  (define-key mu4e-view-mode-map (kbd "M-u") #'my/mu4e-unsubscribe))
+
 (defun my/shr-url-at-or-near (pos)
   "Return the `shr-url' at POS or a few chars around it."
   (when (integer-or-marker-p pos)
