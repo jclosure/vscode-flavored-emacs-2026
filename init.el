@@ -2114,6 +2114,19 @@ offer to execute the marks."
     (mu4e-headers-mark-for-each-if (cons 'trash nil) (lambda (_msg _param) t))
     (mu4e-mark-execute-all)))
 
+(defun my/mu4e-sender-address (msg)
+  "The From address of MSG."
+  (let ((from (car (mu4e-message-field msg :from))))
+    (if (plistp from) (plist-get from :email) (cdr from))))
+
+(defun my/mu4e-sender-query (address &rest exclude)
+  "mu query for mail from ADDRESS outside the unsynced maildirs and EXCLUDE."
+  (mapconcat #'identity
+             (cons (format "from:%s" address)
+                   (mapcar (lambda (dir) (format "NOT maildir:\"%s\"" dir))
+                           (append exclude my/mu4e-unsynced-maildirs)))
+             " AND "))
+
 (defun my/mu4e-trash-all-from (address)
   "List every synced message from ADDRESS, marked for trash.
 Duplicates and related thread messages are shown, so every copy (Inbox and
@@ -2122,20 +2135,26 @@ label folders) is trashed and nothing from anyone else is."
   (let ((mu4e-search-skip-duplicates nil)
         (mu4e-search-include-related nil)
         (mu4e-search-full t))
-    (mu4e-search
-     (mapconcat #'identity
-                (cons (format "from:%s" address)
-                      (mapcar (lambda (dir) (format "NOT maildir:\"%s\"" dir))
-                              (cons mu4e-trash-folder my/mu4e-unsynced-maildirs)))
-                " AND "))))
+    (mu4e-search (my/mu4e-sender-query address mu4e-trash-folder))))
+
+(defun my/mu4e-search-sender ()
+  "Show all mail from the sender of the message at point (M-s).
+Leaves out the unsynced [Gmail]/All Mail copies, so marks set in the result
+(trash, move) act on synced copies, and related thread messages from other
+people.  \\ (`mu4e-search-prev') goes back to the previous search."
+  (interactive)
+  (let* ((msg (or (mu4e-message-at-point t) (user-error "No message here")))
+         (address (or (my/mu4e-sender-address msg)
+                      (user-error "This message has no From address")))
+         (mu4e-search-include-related nil))
+    (mu4e-search (my/mu4e-sender-query address))))
 
 (defun my/mu4e-unsubscribe (&optional keep-mail)
   "Unsubscribe from the list of the message at point, then trash its mail.
 With prefix argument KEEP-MAIL, only unsubscribe."
   (interactive "P")
   (let* ((msg (or (mu4e-message-at-point t) (user-error "No message here")))
-         (from (car (mu4e-message-field msg :from)))
-         (address (if (plistp from) (plist-get from :email) (cdr from)))
+         (address (my/mu4e-sender-address msg))
          (spam (equal (mu4e-message-field msg :maildir) my/mu4e-spam-folder))
          (headers (my/mu4e-unsubscribe-headers (mu4e-message-field msg :path)))
          (method (my/mu4e-unsubscribe-method (car headers) (cdr headers))))
@@ -2167,7 +2186,9 @@ With prefix argument KEEP-MAIL, only unsubscribe."
 
 (with-eval-after-load 'mu4e
   (define-key mu4e-headers-mode-map (kbd "M-u") #'my/mu4e-unsubscribe)
-  (define-key mu4e-view-mode-map (kbd "M-u") #'my/mu4e-unsubscribe))
+  (define-key mu4e-view-mode-map (kbd "M-u") #'my/mu4e-unsubscribe)
+  (define-key mu4e-headers-mode-map (kbd "M-s") #'my/mu4e-search-sender)
+  (define-key mu4e-view-mode-map (kbd "M-s") #'my/mu4e-search-sender))
 
 (defun my/shr-url-at-or-near (pos)
   "Return the `shr-url' at POS or a few chars around it."
