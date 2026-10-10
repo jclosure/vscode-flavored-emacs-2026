@@ -1339,6 +1339,102 @@ after any command by default unless told not to."
             #'my/mu4e-strip-emoji-selector-one)
 ;;; --- end emoji width
 
+;;; --- Open the message in its webmail ---------------------------------------
+;; A message view gets a "Web: Open in Gmail" line among its headers, a link
+;; to the same message in the provider's web UI, and W (headers list or
+;; view) opens it.  The link carries `shr-url', so it behaves like a link in
+;; the mail: mouse-1 and `g' open it through `browse-url', which over SSH
+;; forwards to the client's browser.
+;;
+;; Provider-neutral: each entry in `my/mu4e-webmail-providers' says whether
+;; a message belongs to it and builds the URL; the line only appears when
+;; one matches.  Gmail is the only provider today (this setup reads one
+;; Gmail account through mbsync).  Gmail has no URL for a message by its
+;; Message-ID, so the link is a search for exactly that message
+;; (rfc822msgid:), which lists it as the one result.
+(require 'url-util)
+
+(defun my/mu4e-gmail-account (msg)
+  "The Gmail address MSG was synced from, or nil if it isn't Gmail mail.
+Gmail mail is mail in a [Gmail]/ folder, or any mail when this setup's
+folders are Gmail's (mbsync puts Gmail's labels under [Gmail]/)."
+  (let ((gmail-folder-p (lambda (dir) (and (stringp dir)
+                                           (string-prefix-p "/[Gmail]/" dir)))))
+    (when (or (funcall gmail-folder-p (mu4e-message-field msg :maildir))
+              (funcall gmail-folder-p
+                       (if (stringp mu4e-trash-folder) mu4e-trash-folder ""))
+              (string-match-p "@\\(gmail\\|googlemail\\)\\.com\\'"
+                              (or user-mail-address "")))
+      user-mail-address)))
+
+(defun my/mu4e-gmail-url (msg)
+  "Gmail web URL that finds MSG by its Message-ID."
+  (when-let* ((id (mu4e-message-field msg :message-id))
+              ((not (string-empty-p id))))
+    (format "https://mail.google.com/mail/%s#search/%s"
+            (if-let* ((account (my/mu4e-gmail-account msg)))
+                (concat "?authuser=" (url-hexify-string account))
+              "u/0/")
+            (url-hexify-string (concat "rfc822msgid:" id)))))
+
+(defvar my/mu4e-webmail-providers
+  '((:name "Gmail" :match my/mu4e-gmail-account :url my/mu4e-gmail-url))
+  "Webmail providers: :name, :match (MSG -> non-nil if MSG belongs to it),
+and :url (MSG -> web URL for MSG).  The first match wins.")
+
+(defun my/mu4e-webmail (msg)
+  "Return (NAME . URL) for MSG in its webmail, or nil."
+  (seq-some (lambda (p)
+              (when-let* (((funcall (plist-get p :match) msg))
+                          (url (funcall (plist-get p :url) msg)))
+                (cons (plist-get p :name) url)))
+            my/mu4e-webmail-providers))
+
+(defun my/mu4e-webmail-field (msg)
+  "View-header value: a link to MSG in its webmail, or \"\" (no line)."
+  (pcase (my/mu4e-webmail msg)
+    (`(,name . ,url)
+     (propertize (format "Open in %s" name)
+                 'face 'link 'mouse-face 'highlight 'shr-url url
+                 'my/mu4e-webmail t
+                 'help-echo (format "mouse-1, RET or W: open in %s\n%s" name url)
+                 'keymap (let ((map (make-sparse-keymap)))
+                           (define-key map (kbd "RET") #'my/mu4e-open-in-webmail)
+                           map)))
+    (_ "")))
+
+(defun my/mu4e-webmail-style-link ()
+  "Show the webmail line as a link; Gnus restyles header values."
+  (save-excursion
+    (let ((inhibit-read-only t)
+          (pos (point-min)))
+      (while (setq pos (text-property-any pos (point-max) 'my/mu4e-webmail t))
+        (let ((end (or (next-single-property-change pos 'my/mu4e-webmail)
+                       (point-max))))
+          (add-face-text-property pos end 'link)
+          (setq pos end))))))
+
+(defun my/mu4e-open-in-webmail ()
+  "Open the message at point in its webmail (W)."
+  (interactive)
+  (let* ((msg (or (mu4e-message-at-point t) (user-error "No message here")))
+         (web (or (my/mu4e-webmail msg)
+                  (user-error "No webmail provider for this message"))))
+    (browse-url (cdr web))
+    (message "Opening in %s" (car web))))
+
+(with-eval-after-load 'mu4e
+  (setf (alist-get :webmail mu4e-header-info-custom)
+        '(:name "Web" :shortname "Web"
+          :help "Open this message in its webmail"
+          :function my/mu4e-webmail-field))
+  (unless (memq :webmail mu4e-view-fields)
+    (setq mu4e-view-fields (append mu4e-view-fields '(:webmail))))
+  (add-hook 'mu4e-view-rendered-hook #'my/mu4e-webmail-style-link)
+  (define-key mu4e-headers-mode-map (kbd "W") #'my/mu4e-open-in-webmail)
+  (define-key mu4e-view-mode-map (kbd "W") #'my/mu4e-open-in-webmail))
+;;; --- end webmail
+
 
 ;; Sending Mail via SMTP (Emacs' built-in smtpmail, no local MTA needed)
 (setq message-send-mail-function 'smtpmail-send-it
