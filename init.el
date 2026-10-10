@@ -1294,6 +1294,52 @@ after any command by default unless told not to."
         #'my/mu4e-trash-without-flag-action))
 ;;; --- end Gmail-safe trash
 
+;;; --- Emoji width in the terminal headers list ------------------------------
+;; A subject like "⚠️ Your Gmail storage is 71% full" is ⚠ plus U+FE0F (ask
+;; for the emoji form).  Emacs counts that as one column; the terminal draws
+;; the emoji two columns wide.  When Emacs redraws such a line to full width
+;; (hl-line moving on or off it), the terminal wraps one column early and
+;; every line Emacs draws next lands one row low: the line below shows the
+;; current message's text twice.  Emacs composes ⚠ with U+FE0F before display
+;; tables or text properties apply, so drop U+FE0F from the fields the
+;; headers list shows; ⚠ then reaches the terminal as one column, as Emacs
+;; counts it.  The message itself is unchanged.
+(defun my/mu4e-strip-emoji-selector (msg)
+  "Return MSG with U+FE0F removed from its subject and contact names."
+  (if (or (display-graphic-p) (not (consp msg)))
+      msg
+    (let ((msg (copy-sequence msg))
+          (strip (lambda (s) (if (stringp s) (string-replace "️" "" s) s))))
+      (when-let* ((subject (plist-get msg :subject)))
+        (setq msg (plist-put msg :subject (funcall strip subject))))
+      (dolist (field '(:from :to :cc :bcc))
+        (when-let* ((contacts (plist-get msg field)))
+          (setq msg (plist-put
+                     msg field
+                     (mapcar (lambda (c)
+                               (cond ((plistp c)
+                                      (plist-put (copy-sequence c) :name
+                                                 (funcall strip (plist-get c :name))))
+                                     ((consp c) (cons (funcall strip (car c)) (cdr c)))
+                                     (t c)))
+                             contacts)))))
+      msg)))
+
+(defun my/mu4e-strip-emoji-selector-list (args)
+  "`:filter-args' for `mu4e~headers-append-handler' (a list of messages)."
+  (cons (mapcar #'my/mu4e-strip-emoji-selector (car args)) (cdr args)))
+
+(defun my/mu4e-strip-emoji-selector-one (args)
+  "`:filter-args' for `mu4e~headers-update-handler' (one message)."
+  (cons (my/mu4e-strip-emoji-selector (car args)) (cdr args)))
+
+(advice-add 'mu4e~headers-append-handler :filter-args
+            #'my/mu4e-strip-emoji-selector-list)
+(advice-add 'mu4e~headers-update-handler :filter-args
+            #'my/mu4e-strip-emoji-selector-one)
+;;; --- end emoji width
+
+
 ;; Sending Mail via SMTP (Emacs' built-in smtpmail, no local MTA needed)
 (setq message-send-mail-function 'smtpmail-send-it
       smtpmail-starttls-credentials '(("smtp.gmail.com" 587 nil nil))
