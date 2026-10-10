@@ -1275,6 +1275,25 @@ after any command by default unless told not to."
       mu4e-trash-folder  "/[Gmail]/Trash"
       mu4e-refile-folder "/[Gmail]/All Mail")
 
+;;; --- Gmail-safe trash ------------------------------------------------------
+;; mu4e's trash mark moves a message to the trash folder AND sets the Trashed
+;; flag.  mbsync sends that flag to Gmail as \Deleted, and Gmail's IMAP
+;; auto-expunge then erases a \Deleted message in [Gmail]/Trash for good:
+;; mail trashed in mu4e skipped Gmail's 30-day Trash entirely.  Move to
+;; Trash without the flag, so Gmail keeps it for 30 days like a web-UI trash.
+;; mu4e 1.12+ has a switch for this; 1.10 (Ubuntu's package) doesn't, so the
+;; trash action is replaced too.  D (delete) still deletes outright.
+(setq mu4e-trash-without-flag t)
+
+(defun my/mu4e-trash-without-flag-action (docid _msg target)
+  "Move DOCID to TARGET (the trash folder) without the Trashed flag."
+  (mu4e--server-move docid (mu4e--mark-check-target target) "-N"))
+
+(with-eval-after-load 'mu4e-mark
+  (setf (plist-get (alist-get 'trash mu4e-marks) :action)
+        #'my/mu4e-trash-without-flag-action))
+;;; --- end Gmail-safe trash
+
 ;; Sending Mail via SMTP (Emacs' built-in smtpmail, no local MTA needed)
 (setq message-send-mail-function 'smtpmail-send-it
       smtpmail-starttls-credentials '(("smtp.gmail.com" 587 nil nil))
