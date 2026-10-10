@@ -1645,8 +1645,10 @@ so margins and cell edges continue straight through it."
       (let ((pos bol))
         (while (< pos eol)
           (let ((next (min eol (next-single-property-change pos 'face nil eol))))
+            ;; In front, not appended: shr's heading faces inherit `default',
+            ;; whose theme background would otherwise win.
             (unless (my/mail-background-at pos)
-              (add-face-text-property pos next (list :background bg) t))
+              (add-face-text-property pos next (list :background bg)))
             (setq pos next))))
       (my/mail-close-slivers bol eol))))
 
@@ -1735,10 +1737,22 @@ show as a stub."
               (1+ (alist-get bg counts 0 nil #'equal)))))
     (car (car (sort counts (lambda (a b) (> (cdr a) (cdr b))))))))
 
+(defun my/mail-clear-newline-faces (start end)
+  "Remove faces from the newlines between START and END.
+shr leaves a cell's background on some line ends, and a terminal paints
+the newline's position as one more cell in that color, so those lines
+looked a column wider than the panel."
+  (save-excursion
+    (goto-char start)
+    (while (search-forward "
+" end t)
+      (put-text-property (1- (point)) (point) 'face nil))))
+
 (defun my/mail-paint-panels (start end)
   "Square off the background-colored sections between START and END."
   (my/mail-expand-align-spaces start end)
   (my/mail-pin-backgrounds start end)
+  (my/mail-clear-newline-faces start end)
   (save-excursion
     (let ((lines nil) (width 0) (gaps nil) (page nil))
       (goto-char start)
@@ -1757,6 +1771,27 @@ show as a stub."
           (goto-char eol)
           (forward-line 1)))
       (setq lines (vconcat (nreverse lines)))
+      ;; Text with no background of its own (a heading or paragraph whose
+      ;; cell color shr only put on the padding) between two lines of one
+      ;; panel is part of that panel; otherwise it cuts a dark notch in it.
+      (dotimes (i (length lines))
+        (let ((line (aref lines i)))
+          (when (and (not (aref line 2)) (null (aref line 1)))
+            (let ((above (seq-find (lambda (l) (aref l 1))
+                                   (reverse (seq-subseq lines 0 i))))
+                  (below (seq-find (lambda (l) (aref l 1))
+                                   (seq-subseq lines (1+ i)))))
+              (when (and above below (equal (aref above 1) (aref below 1)))
+                (aset line 1 (aref above 1)))))))
+      ;; Any other text without a background sits on the browser's default
+      ;; white page, which the palette shows as its neutral surface: once a
+      ;; mail has panels at all, plain lines (a logo link, a heading above
+      ;; the first panel) get that instead of the darker theme background.
+      (when (seq-some (lambda (l) (aref l 1)) lines)
+        (let ((page (alist-get 'neutral my/mu4e-html-background-palette)))
+          (seq-doseq (line lines)
+            (unless (or (aref line 2) (aref line 1))
+              (aset line 1 page)))))
       ;; A blank line belongs to a panel when the nearest non-blank lines
       ;; above and below it are both in that panel.
       (dotimes (i (length lines))
@@ -1914,16 +1949,37 @@ Only whitespace-only lines go."
             (forward-line 1))))
       (set-marker end nil))))
 
-(defun my/mail-text-style-warnings (start end)
-  "Drop the emoji selector from shr's suspicious-link warning.
-shr inserts \"⚠\" plus U+FE0F after a link whose text names a different
-host than its target.  Emacs counts that as one column, but terminals
-draw the emoji form two columns wide, so the line sticks out past its
-panel.  The plain ⚠ is one column everywhere; its help-echo stays."
+(defvar my/mail-invisible-chars
+  (concat "­"                      ; soft hyphen
+          "͏"                      ; combining grapheme joiner
+          "᠎"                      ; Mongolian vowel separator
+          "​‌"                ; zero-width space, non-joiner
+          "⁠⁡⁢⁣⁤" ; word joiner, invisible operators
+          "︎️"                ; text/emoji variation selectors
+          "﻿")                     ; zero-width no-break space (BOM)
+  "Characters a browser doesn't draw that terminal Emacs mis-measures.")
+
+(defun my/mail-strip-invisible-chars (start end)
+  "Delete characters a browser wouldn't draw between START and END.
+Mail is full of them: preheader padding (U+034F, U+200C), anti-autolink
+breaks inside addresses (\"I\\u200cnc.\"), emoji selectors.  Terminal Emacs
+counts most as zero columns but draws them as a one-column placeholder,
+so lines holding them stick out past their panel (and show stray
+underscores); U+FE0F makes the terminal draw an emoji two columns wide
+that Emacs counts as one, which also covers shr's \"⚠\\uFE0F\" link
+warning (its help-echo stays on the ⚠).  Nothing visible is lost.  A
+zero-width joiner stays where it joins emoji (👨‍💻); elsewhere it goes too."
   (save-excursion
     (goto-char start)
-    (while (search-forward "⚠️" end t)
-      (delete-region (1- (point)) (point)))))
+    (let ((end (copy-marker end))
+          (re (concat "[" my/mail-invisible-chars "‍]")))
+      (while (re-search-forward re end t)
+        (let ((char (char-before)))
+          (unless (and (eq char #x200D)
+                       (eq (aref char-script-table (or (char-before (1- (point))) 0)) 'emoji)
+                       (eq (aref char-script-table (or (char-after (point)) 0)) 'emoji))
+            (delete-region (1- (point)) (point)))))
+      (set-marker end nil))))
 
 (defun my/mu4e-make-room-for-url-numbers ()
   "After `mu4e--view-activate-urls', keep panel lines at their width.
@@ -1964,8 +2020,8 @@ terminal draws it as a full column."
          (start (point-marker))
          (end (copy-marker (point) t)))
     (prog1 (apply orig args)
+      (my/mail-strip-invisible-chars start end)
       (my/mail-collapse-blank-lines start end)
-      (my/mail-text-style-warnings start end)
       (my/mail-paint-panels start end)
       (set-marker start nil)
       (set-marker end nil))))
