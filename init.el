@@ -192,10 +192,36 @@
 ;;; ----------------------------------------------------------------------------
 ;;; Look & feel: Catppuccin theme (+ Modus as a built-in light fallback)
 ;;; ----------------------------------------------------------------------------
+(defun my/tty-set-terminal-colors ()
+  "Set the real terminal default colors to match Catppuccin.
+
+TTY Emacs can color the cells it draws, but terminal cells outside Emacs's
+current redisplay area (for example the blank echo-area row at the bottom
+right) can still show the terminal emulator's own default black.  OSC 10/11
+fixes those undrawn cells too.  Send both direct OSC and tmux passthrough; the
+terminal/tmux will ignore the form it does not understand."
+  (unless (display-graphic-p)
+    (let ((fg "#cdd6f4")
+          (bg "#1e1e2e"))
+      (dolist (seq (list (format "\e]10;%s\a" fg)
+                         (format "\e]11;%s\a" bg)
+                         (format "\ePtmux;\e\e]10;%s\a\e\\" fg)
+                         (format "\ePtmux;\e\e]11;%s\a\e\\" bg)))
+        (send-string-to-terminal seq)))))
+
 (use-package catppuccin-theme
   :demand t
   :init (setq catppuccin-flavor 'mocha) ; mocha | macchiato | frappe | latte
-  :config (load-theme 'catppuccin :no-confirm))
+  :config
+  (load-theme 'catppuccin :no-confirm)
+  ;; In terminal Emacs, keep both Emacs's default face and the terminal's real
+  ;; default background on Catppuccin base, so blank cells cannot show as black.
+  (unless (display-graphic-p)
+    (set-face-attribute 'default nil :background "#1e1e2e" :foreground "#cdd6f4")
+    (set-face-attribute 'fringe nil :background "#1e1e2e")
+    (set-face-attribute 'vertical-border nil :background "#1e1e2e" :foreground "#1e1e2e")
+    (my/tty-set-terminal-colors)
+    (redraw-display)))
 
 (defun my/toggle-light-dark ()
   "Flip between Catppuccin Mocha (dark) and the built-in Modus Operandi (light)."
@@ -2153,23 +2179,140 @@ terminal draws it as a full column."
 (setq gnus-article-button-face 'my/mu4e-mime-button-face)
 
 ;; Gnus pads some buttons (the text/plain | text/html chooser) with trailing
-;; spaces, so the underline runs past the label. Take the face off trailing
-;; whitespace of each button so the underline matches the text length.
+;; spaces, so the underline and clickable area run across the whole row.  Strip
+;; button/link properties from the padding after each visible MIME label.
+(defun my/mu4e-face-has-p (face target)
+  "Non-nil when FACE is or contains TARGET."
+  (cond ((eq face target) t)
+        ((consp face)
+         (let (found)
+           (while (and face (not found))
+             (setq found (my/mu4e-face-has-p (pop face) target)))
+           found))))
+
+(defun my/mu4e-buttonish-p (beg end)
+  "Non-nil when BEG..END contains a Gnus/mu4e button property."
+  (let ((pos beg) found)
+    (while (and (< pos end) (not found))
+      (setq found (or (get-text-property pos 'button)
+                      (get-text-property pos 'keymap)
+                      (get-text-property pos 'action)
+                      (get-text-property pos 'mouse-face)
+                      (my/mu4e-face-has-p (get-text-property pos 'face)
+                                          'my/mu4e-mime-button-face))
+            pos (or (next-property-change pos nil end) end)))
+    found))
+
+(defun my/mu4e-unbuttonize-padding (beg end)
+  "Remove button/link properties from padding in BEG..END."
+  (remove-text-properties
+   beg end
+   '(face nil mouse-face nil keymap nil local-map nil button nil action nil
+          follow-link nil help-echo nil mouse-1 nil mouse-2 nil rear-nonsticky nil)))
+
 (defun my/mu4e-trim-button-underline ()
-  "Remove the button face from trailing whitespace of MIME buttons."
-  (let ((inhibit-read-only t) (pos (point-min)) end)
+  "Make MIME chooser buttons compact and remove overlong click targets."
+  (let ((inhibit-read-only t))
     (save-excursion
-      (while (setq pos (text-property-any pos (point-max)
-                                          'face 'my/mu4e-mime-button-face))
-        (setq end (or (next-single-property-change pos 'face) (point-max)))
-        (let ((e end))
-          (goto-char e)
-          (skip-chars-backward " \t" pos)
-          (when (< (point) e)
-            (remove-text-properties (point) e '(face nil))))
-        (setq pos end)))))
+      (goto-char (point-min))
+      ;; Gnus renders multipart/alternative choices like:
+      ;;   1.  ( ) text/plain      (*) text/html
+      ;; Drop the redundant part number; the radio buttons are enough.
+      (while (re-search-forward
+              "^\\([0-9]+\\.[ \t]*\\)\\((\\(?: \\|\\*\\)) [^[:space:]\n]+\\)"
+              nil t)
+        (when (my/mu4e-buttonish-p (match-beginning 2) (match-end 2))
+          (delete-region (match-beginning 1) (match-end 1))))
+      (goto-char (point-min))
+      ;; Remove button properties from padding, and collapse inter-button gaps
+      ;; to two plain spaces.  Delete trailing padding after the final choice.
+      (while (re-search-forward
+              "\\((\\(?: \\|\\*\\)) [^[:space:]\n]+\\)\\([ \t]+\\)"
+              nil t)
+        (let ((label-beg (match-beginning 1))
+              (padding-beg (match-beginning 2))
+              (padding-end (match-end 2)))
+          (when (my/mu4e-buttonish-p label-beg padding-beg)
+            (if (save-excursion
+                  (goto-char padding-end)
+                  (looking-at-p "(\\(?: \\|\\*\\)) [^[:space:]\n]+"))
+                (progn
+                  (my/mu4e-unbuttonize-padding padding-beg padding-end)
+                  (when (> (- padding-end padding-beg) 2)
+                    (delete-region (+ padding-beg 2) padding-end)))
+              (delete-region padding-beg padding-end))))))))
+(defun my/mu4e-message-content-type (msg)
+  "Return MSG's top-level Content-Type, or nil."
+  (when-let* ((path (and msg (mu4e-message-field msg :path)))
+              ((file-readable-p path)))
+    (with-temp-buffer
+      (insert-file-contents path nil 0 4096)
+      (goto-char (point-min))
+      (when (re-search-forward "^Content-Type:[ \t]*\\([^;\n]+\\)" nil t)
+        (downcase (string-trim (match-string 1)))))))
+
+(defun my/mu4e-format-status ()
+  "Show a compact format line when there is no MIME format chooser."
+  (let* ((msg (ignore-errors (mu4e-message-at-point t)))
+         (type (my/mu4e-message-content-type msg))
+         (label (pcase type
+                  ("text/html" "HTML only")
+                  ("text/plain" "Plain text only"))))
+    (when label
+      (save-excursion
+        (goto-char (point-min))
+        (unless (save-excursion
+                  (re-search-forward "^(\\(?: \\|\\*\\)) text/" nil t))
+          (when (re-search-forward "^Web:.*$" nil t)
+            (end-of-line)
+            (insert "\n"
+                    (propertize "Format: " 'face 'message-header-name)
+                    (propertize label 'face 'font-lock-constant-face))))))))
+
+(defun my/mu4e-compact-format-gap ()
+  "Keep exactly one blank line between the format chooser and message body.
+
+Some mail contributes its own leading blank paragraph, while Gnus's MIME
+chooser contributes separator whitespace too.  The combination makes the body
+start either one or two lines below the chooser depending on the sender."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward
+             "^\\(?:Format: .*\\|.*(\\(?: \\|\\*\\)) text/[^[:space:]\n]+.*\\)$"
+             nil t)
+        (forward-line 1)
+        (let ((gap-start (point)))
+          (while (looking-at-p "[ \t]*$")
+            (forward-line 1))
+          (unless (= gap-start (point))
+            (delete-region gap-start (point)))
+          (insert "\n"))))))
+
+(defun my/mu4e-polish-format-controls ()
+  "Keep the MIME format controls compact after initial render or a click."
+  (when (derived-mode-p 'mu4e-view-mode)
+    (my/mu4e-format-status)
+    (my/mu4e-trim-button-underline)
+    (my/mu4e-compact-format-gap)))
+
+(defun my/mu4e-polish-format-controls-after-button (&rest _)
+  "Polish MIME controls after a format chooser button is pressed."
+  (when (derived-mode-p 'mu4e-view-mode)
+    (my/mu4e-polish-format-controls)))
+
+(defun my/mu4e-enable-format-polish ()
+  "Polish MIME controls now and after chooser clicks rerender them."
+  (my/mu4e-polish-format-controls)
+  ;; Clicking text/plain/text/html rewrites the MIME controls after
+  ;; `mu4e-view-rendered-hook' has already run, so polish again after commands
+  ;; in this view buffer.  The polish functions are idempotent.
+  (add-hook 'post-command-hook #'my/mu4e-polish-format-controls nil t))
+
+(advice-add 'push-button :after #'my/mu4e-polish-format-controls-after-button)
+
 (with-eval-after-load 'mu4e
-  (add-hook 'mu4e-view-rendered-hook #'my/mu4e-trim-button-underline))
+  (add-hook 'mu4e-view-rendered-hook #'my/mu4e-enable-format-polish t))
 
 ;; The real standard mml/message-mode bindings for whole-message PGP/MIME are
 ;; C-c C-m c p (encrypt) and C-c C-m s p (sign) - NOT "C-c C-m e p"/"e s" as
