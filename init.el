@@ -2152,6 +2152,25 @@ terminal draws it as a full column."
   "Face for mu4e/Gnus MIME and attachment buttons.")
 (setq gnus-article-button-face 'my/mu4e-mime-button-face)
 
+;; Gnus pads some buttons (the text/plain | text/html chooser) with trailing
+;; spaces, so the underline runs past the label. Take the face off trailing
+;; whitespace of each button so the underline matches the text length.
+(defun my/mu4e-trim-button-underline ()
+  "Remove the button face from trailing whitespace of MIME buttons."
+  (let ((inhibit-read-only t) (pos (point-min)) end)
+    (save-excursion
+      (while (setq pos (text-property-any pos (point-max)
+                                          'face 'my/mu4e-mime-button-face))
+        (setq end (or (next-single-property-change pos 'face) (point-max)))
+        (let ((e end))
+          (goto-char e)
+          (skip-chars-backward " \t" pos)
+          (when (< (point) e)
+            (remove-text-properties (point) e '(face nil))))
+        (setq pos end)))))
+(with-eval-after-load 'mu4e
+  (add-hook 'mu4e-view-rendered-hook #'my/mu4e-trim-button-underline))
+
 ;; The real standard mml/message-mode bindings for whole-message PGP/MIME are
 ;; C-c C-m c p (encrypt) and C-c C-m s p (sign) - NOT "C-c C-m e p"/"e s" as
 ;; an earlier version of this comment claimed; "e" under that prefix is
