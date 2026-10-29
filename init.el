@@ -2262,7 +2262,8 @@ terminal draws it as a full column."
       (save-excursion
         (goto-char (point-min))
         (unless (save-excursion
-                  (re-search-forward "^(\\(?: \\|\\*\\)) text/" nil t))
+                  (re-search-forward "^\\(?:Format: \\|(\\(?: \\|\\*\\)) text/\\)"
+                                     nil t))
           (when (re-search-forward "^Web:.*$" nil t)
             (end-of-line)
             (insert "\n"
@@ -2283,11 +2284,14 @@ start either one or two lines below the chooser depending on the sender."
              nil t)
         (forward-line 1)
         (let ((gap-start (point)))
-          (while (looking-at-p "[ \t]*$")
+          (while (and (not (eobp)) (looking-at-p "[ \t]*$"))
             (forward-line 1))
-          (unless (= gap-start (point))
-            (delete-region gap-start (point)))
-          (insert "\n"))))))
+          ;; Runs from `post-command-hook', so leave an already-compact gap
+          ;; alone: rewriting it would snap point back onto the blank line.
+          (unless (and (= (point) (1+ gap-start))
+                       (eq (char-after gap-start) ?\n))
+            (delete-region gap-start (point))
+            (insert "\n")))))))
 
 (defun my/mu4e-polish-format-controls ()
   "Keep the MIME format controls compact after initial render or a click."
