@@ -1650,16 +1650,36 @@ and :url (MSG -> web URL for MSG).  The first match wins.")
 (defun my/mail-background-at (pos)
   (my/mail-face-background (get-text-property pos 'face)))
 
+(defun my/mail-blank-p (start end)
+  "Non-nil when START..END holds only whitespace, like `string-blank-p'.
+Scans the buffer in place instead of copying the text and its properties
+into a string, which added up over every line of a long mail."
+  (save-excursion
+    (goto-char start)
+    (skip-chars-forward " \t\n\r" end)
+    (>= (point) end)))
+
 (defun my/mail-line-background (bol eol)
   "Background covering at least half the visible text between BOL and EOL."
-  (let ((counts nil) (total 0))
-    (dotimes (i (- eol bol))
-      (let ((pos (+ bol i)))
-        (unless (memq (char-after pos) '(?\s ?\t))
-          (setq total (1+ total))
+  ;; Count per run of one face, not per character: long mail has thousands
+  ;; of lines, and this runs on every one of them.
+  (let ((counts nil) (total 0) (pos bol))
+    (while (< pos eol)
+      (let* ((next (min eol (next-single-property-change pos 'face nil eol)))
+             (text (- (- next pos)
+                      (save-excursion
+                        (goto-char pos)
+                        (let ((n 0))
+                          (while (< (point) next)
+                            (setq n (+ n (skip-chars-forward " \t" next)))
+                            (skip-chars-forward "^ \t" next))
+                          n)))))
+        (when (> text 0)
+          (setq total (+ total text))
           (when-let* ((bg (my/mail-background-at pos)))
             (setf (alist-get bg counts 0 nil #'equal)
-                  (1+ (alist-get bg counts 0 nil #'equal)))))))
+                  (+ text (alist-get bg counts 0 nil #'equal)))))
+        (setq pos next)))
     (when-let* ((best (car (sort counts (lambda (a b) (> (cdr a) (cdr b)))))))
       (when (>= (* 2 (cdr best)) total)
         (car best)))))
@@ -1714,15 +1734,14 @@ panel.  Put the email color first again wherever that happens."
 
 (defun my/mail-whitespace-runs (bol eol)
   "Return (START . END) for each run of spaces between BOL and EOL."
-  (let ((runs nil) (pos bol))
-    (while (< pos eol)
-      (if (not (eq (char-after pos) ?\s))
-          (setq pos (1+ pos))
-        (let ((run-end pos))
-          (while (and (< run-end eol) (eq (char-after run-end) ?\s))
-            (setq run-end (1+ run-end)))
-          (push (cons pos run-end) runs)
-          (setq pos run-end))))
+  (let ((runs nil))
+    (save-excursion
+      (goto-char bol)
+      (while (< (point) eol)
+        (skip-chars-forward "^ " eol)
+        (let ((start (point)))
+          (when (> (skip-chars-forward " " eol) 0)
+            (push (cons start (point)) runs)))))
     (nreverse runs)))
 
 (defun my/mail-set-background (start end bg)
@@ -1737,19 +1756,29 @@ so margins and cell edges continue straight through it."
   ;; Trailing blanks past the panel edge would stick out once painted.
   (move-to-column width)
   (when (and (< (point) (line-end-position))
-             (string-blank-p (buffer-substring (point) (line-end-position))))
+             (my/mail-blank-p (point) (line-end-position)))
     (delete-region (point) (line-end-position)))
   (end-of-line)
   (when (< (current-column) width)
     (insert (make-string (- width (current-column)) ?\s)))
   (let ((eol (line-end-position)))
-    (if (string-blank-p (buffer-substring bol eol))
+    (if (my/mail-blank-p bol eol)
         (progn
           (my/mail-set-background bol eol bg)
+          ;; Copy the line above one run of a single face at a time, not one
+          ;; column at a time: per-column face changes on every blank line
+          ;; of a long mail allocated enough to set off garbage collection.
           (when above
-            (dotimes (i (- eol bol))
-              (when-let* ((color (my/mail-background-at (+ above i))))
-                (my/mail-set-background (+ bol i) (+ bol i 1) color)))))
+            (let* ((len (- eol bol))
+                   (limit (min (+ above len) (point-max)))
+                   (pos above))
+              (while (< pos limit)
+                (let ((next (min limit (next-single-property-change pos 'face nil limit)))
+                      (color (my/mail-background-at pos)))
+                  (when color
+                    (my/mail-set-background (+ bol (- pos above)) (+ bol (- next above))
+                                            color))
+                  (setq pos next))))))
       (dolist (run (my/mail-whitespace-runs bol eol))
         (let* ((start (car run))
                (end (cdr run))
@@ -1786,12 +1815,15 @@ wrapper as thin vertical stripes through the section.  A blank run at
 most `my/mail-sliver-max-width' columns wide with the same color on both
 sides takes that color; wider runs are real gutters and stay."
   (let ((runs nil) (pos bol))
-    ;; Split the line into runs of one background color.
+    ;; Split the line into runs of one background color.  Step from one face
+    ;; change to the next, joining neighbors whose faces differ but whose
+    ;; background is the same.
     (while (< pos eol)
-      (let ((color (my/mail-background-at pos)) (end (1+ pos)))
-        (while (and (< end eol) (equal (my/mail-background-at end) color))
-          (setq end (1+ end)))
-        (push (list pos end color) runs)
+      (let ((color (my/mail-background-at pos))
+            (end (min eol (next-single-property-change pos 'face nil eol))))
+        (if (and runs (equal (nth 2 (car runs)) color))
+            (setf (nth 1 (car runs)) end)
+          (push (list pos end color) runs))
         (setq pos end)))
     (setq runs (vconcat (nreverse runs)))
     (dotimes (i (length runs))
@@ -1801,7 +1833,7 @@ sides takes that color; wider runs are real gutters and stay."
                     (`(,_ ,_ ,right) (aref runs (1+ i))))
           (when (and left (equal left right)
                      (<= (- end start) my/mail-sliver-max-width)
-                     (string-blank-p (buffer-substring start end)))
+                     (my/mail-blank-p start end))
             (my/mail-set-background start end left)
             ;; Later runs compare against this one's new color.
             (setf (nth 2 (aref runs i)) left)))))))
@@ -1870,6 +1902,19 @@ looked a column wider than the panel."
 " end t)
       (put-text-property (1- (point)) (point) 'face nil))))
 
+(defun my/mail-nearest-line (lines i step slot)
+  "Nearest line to I in LINES, going STEP (-1 up, 1 down), that qualifies.
+SLOT 1 wants a line with a background; SLOT 2 wants a non-blank line.
+Walks the vector in place: copying it for every line made long mail
+\(thousands of lines) quadratic."
+  (let ((j (+ i step)) (n (length lines)) found)
+    (while (and (not found) (>= j 0) (< j n))
+      (let ((line (aref lines j)))
+        (when (if (= slot 1) (aref line 1) (not (aref line 2)))
+          (setq found line)))
+      (setq j (+ j step)))
+    found))
+
 (defun my/mail-paint-panels (start end)
   "Square off the background-colored sections between START and END."
   (my/mail-expand-align-spaces start end)
@@ -1881,7 +1926,7 @@ looked a column wider than the panel."
       (while (and (< (point) end) (not (eobp)))
         (let* ((bol (point))
                (eol (line-end-position))
-               (blank (string-blank-p (buffer-substring bol eol))))
+               (blank (my/mail-blank-p bol eol)))
           (unless blank
             (end-of-line)
             (skip-chars-backward " \t" bol)
@@ -1899,10 +1944,8 @@ looked a column wider than the panel."
       (dotimes (i (length lines))
         (let ((line (aref lines i)))
           (when (and (not (aref line 2)) (null (aref line 1)))
-            (let ((above (seq-find (lambda (l) (aref l 1))
-                                   (reverse (seq-subseq lines 0 i))))
-                  (below (seq-find (lambda (l) (aref l 1))
-                                   (seq-subseq lines (1+ i)))))
+            (let ((above (my/mail-nearest-line lines i -1 1))
+                  (below (my/mail-nearest-line lines i 1 1)))
               (when (and above below (equal (aref above 1) (aref below 1)))
                 (aset line 1 (aref above 1)))))))
       ;; Any other text without a background sits on the browser's default
@@ -1918,10 +1961,8 @@ looked a column wider than the panel."
       ;; above and below it are both in that panel.
       (dotimes (i (length lines))
         (when (aref (aref lines i) 2)
-          (let ((above (seq-find (lambda (l) (not (aref l 2)))
-                                 (reverse (seq-subseq lines 0 i))))
-                (below (seq-find (lambda (l) (not (aref l 2)))
-                                 (seq-subseq lines (1+ i)))))
+          (let ((above (my/mail-nearest-line lines i -1 2))
+                (below (my/mail-nearest-line lines i 1 2)))
             (when (and above below (aref above 1)
                        (equal (aref above 1) (aref below 1)))
               (aset (aref lines i) 1 (aref above 1))))))
@@ -1944,10 +1985,8 @@ looked a column wider than the panel."
       ;; the line below is already painted.
       (setq page (my/mail-page-color lines))
       (dolist (i gaps)
-        (let ((above (seq-find (lambda (l) (not (aref l 2)))
-                               (reverse (seq-subseq lines 0 i))))
-              (below (seq-find (lambda (l) (not (aref l 2)))
-                               (seq-subseq lines (1+ i)))))
+        (let ((above (my/mail-nearest-line lines i -1 2))
+              (below (my/mail-nearest-line lines i 1 2)))
           (my/mail-paint-gap (marker-position (aref (aref lines i) 0))
                              (and above (marker-position (aref above 0)))
                              (and below (marker-position (aref below 0)))
@@ -1989,7 +2028,7 @@ leftmost start, up to `my/mail-ragged-edge-max' columns."
             (cl-mapc
              (lambda (bol start)
                (when (and start (< edge start (+ edge my/mail-ragged-edge-max 1))
-                          (string-blank-p (buffer-substring (+ bol edge) (+ bol start))))
+                          (my/mail-blank-p (+ bol edge) (+ bol start)))
                  (my/mail-set-background (+ bol edge) (+ bol start) bg)))
              bols starts))
           (setq i j))))))
@@ -2692,6 +2731,26 @@ client via ssh, with OSC 52 clipboard fallback."
       (message "Could not open browser on SSH client; copied link to local clipboard: %s" url))))
 
 (setq browse-url-browser-function #'my/browse-url-local-aware)
+
+;; init.el is never byte-compiled, so the functions above run in the Lisp
+;; interpreter.  For HTML mail that cost twice: a long message rendered
+;; about half as fast, and the garbage interpreted lexical code leaves
+;; behind made the next collection 10x slower or worse (seconds in a long
+;; session), which kept "Loading..." up and froze every frame.  Compile
+;; the mail functions in memory once Emacs is first idle.  The code stays
+;; here, so the tests that read init.el still see it.
+(defun my/mail-compile-functions ()
+  "Byte-compile the interpreted mail and mu4e functions defined in init.el."
+  (let ((byte-compile-warnings nil))
+    (mapatoms
+     (lambda (sym)
+       (when (and (fboundp sym)
+                  (string-match-p "\\`my/\\(?:mu4e\\|mail\\|mm\\|shr\\)-"
+                                  (symbol-name sym))
+                  (memq (car-safe (symbol-function sym)) '(closure lambda)))
+         (ignore-errors (byte-compile sym)))))))
+
+(run-with-idle-timer 1 nil #'my/mail-compile-functions)
 
 (provide 'init-mu4e)
 
