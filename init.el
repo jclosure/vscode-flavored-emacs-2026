@@ -1497,6 +1497,25 @@ and :url (MSG -> web URL for MSG).  The first match wins.")
 (add-to-list 'gnus-buttonized-mime-types "multipart/signed")
 (add-to-list 'gnus-buttonized-mime-types "multipart/alternative")
 
+;; Don't fetch remote images.  Gnus blocks them only in mail-like groups and
+;; mu4e has no group, so a GUI Emacs fetched every image (tracking pixels
+;; included) while opening the message; each fetch's DNS and TLS setup can
+;; block, freezing every frame for seconds on image-heavy newsletters.
+;; Images embedded in the message (cid:) still show.  I in the message
+;; view redraws it with its remote images.
+(setq gnus-blocked-images ".")
+
+(defun my/mu4e-view-show-images ()
+  "Redraw the message in this view with its remote images."
+  (interactive)
+  (let ((msg (or (bound-and-true-p mu4e--view-message)
+                 (user-error "No message here")))
+        (gnus-blocked-images nil))
+    (mu4e-view msg)))
+
+(with-eval-after-load 'mu4e
+  (define-key mu4e-view-mode-map (kbd "I") #'my/mu4e-view-show-images))
+
 ;; Preserve HTML section/heading colors, but ask SHR to correct low contrast.
 ;; Defaults are distance 5 / luminance 40; 10 / 60 follows Tassilo Horn's
 ;; example: https://yhetil.org/emacs-user/877g3cfnwp.fsf@gnu.org/
