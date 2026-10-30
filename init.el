@@ -24,6 +24,10 @@
           (lambda ()
             ;; Put the file-name handler list back (early-init nulled it).
             (setq file-name-handler-alist my--file-name-handler-alist)
+            ;; early-init raised this for startup; left at 0.6 it let
+            ;; garbage reach 60% of the heap before each collection (see
+            ;; the gcmh threshold below for why that hurts).
+            (setq gc-cons-percentage 0.1)
             (let ((elapsed (float-time (time-subtract after-init-time
                                                       before-init-time))))
               (message "Emacs ready in %.2fs with %d GCs"
@@ -73,9 +77,26 @@
 
 (use-package gcmh
   :demand t
+  ;; Keep the high threshold modest.  Emacs 29's sweep hands freed memory
+  ;; blocks back in quadratic time (lisp_align_free walks the whole free
+  ;; list per block), so one big collection costs far more than several
+  ;; small ones: at 128 MB, moving between HTML newsletters in mu4e stalled
+  ;; 6-10 s every few messages; 64 MB stalled 2 s; 32 MB never over 0.3 s.
   :init (setq gcmh-idle-delay 'auto
-              gcmh-high-cons-threshold (* 128 1024 1024))
-  :config (gcmh-mode 1))
+              gcmh-high-cons-threshold (* 32 1024 1024))
+  :config
+  (gcmh-mode 1)
+  ;; Emacs 29.3 crash (segfault in GC marking): a collection from a timer
+  ;; can run after a window was replaced but before the screen is redrawn.
+  ;; The terminal frame's glyphs still point at strings of the old view
+  ;; (mu4e's "Loading..." and [1] link labels); that collection frees them
+  ;; and the next one follows the stale glyph into freed memory.  Moving
+  ;; back and forth in mu4e crashed within a few messages, even with stock
+  ;; mu4e.  Redraw first so the glyphs are current.
+  (defun my/gcmh-redisplay-first (&rest _)
+    "Redraw before gcmh's idle collection so no glyph is stale."
+    (redisplay t))
+  (advice-add 'gcmh-idle-garbage-collect :before #'my/gcmh-redisplay-first))
 
 ;;; ----------------------------------------------------------------------------
 ;;; Sane, modern defaults
@@ -1504,6 +1525,20 @@ and :url (MSG -> web URL for MSG).  The first match wins.")
 ;; Images embedded in the message (cid:) still show.  I in the message
 ;; view redraws it with its remote images.
 (setq gnus-blocked-images ".")
+
+;; Same Emacs 29.3 bug as `my/gcmh-redisplay-first': opening a message
+;; replaces the view window, and until the screen is redrawn the frame's
+;; glyphs point at strings of the old view.  A collection that ran in that
+;; gap (rendering allocates enough to trigger one) walked into freed memory:
+;; it took 5-8 seconds, or crashed.  No collection inside `mu4e-view'; redraw
+;; before it returns, so the one that follows sees current glyphs.
+(defun my/mu4e-view-redisplay-before-gc (orig &rest args)
+  "Around advice for `mu4e-view': no GC until the new view is on screen."
+  (let ((gc-cons-threshold most-positive-fixnum))
+    (prog1 (apply orig args)
+      (redisplay t))))
+
+(advice-add 'mu4e-view :around #'my/mu4e-view-redisplay-before-gc)
 
 (defun my/mu4e-view-show-images ()
   "Redraw the message in this view with its remote images."
